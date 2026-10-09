@@ -7,6 +7,6 @@
       "@types/wicg-file-system-access",
       "@types/leaflet"
     ],
-    "noImplicitThis": false,
-  },
+    "noImplicitThis": false
+  }
 }
