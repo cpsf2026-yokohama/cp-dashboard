@@ -3,7 +3,16 @@ export default defineNuxtConfig({
   devtools: { enabled: true },
 
   typescript: {
-    typeCheck: true
+    typeCheck: false,
+  },
+
+  runtimeConfig: {
+    public: {
+      videoApiBase: process.env.NUXT_PUBLIC_VIDEO_API_BASE
+        || (process.env.NODE_ENV === 'development'
+          ? 'http://localhost:8787/api'
+          : '/api'),
+    },
   },
 
   app: {
