@@ -3,7 +3,7 @@ export default {
   props: {
     labelText: String,
     fileName: String,
-    source: String,
+    source: HTMLAudioElement,
     onAudioChange: Function,
     removeAudio: Function,
     playAudio: Function
