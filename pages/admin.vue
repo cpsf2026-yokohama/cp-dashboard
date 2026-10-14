@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 
 type Video = {
   id: string
@@ -50,6 +50,50 @@ const uploadFileInput = ref<HTMLInputElement | null>(null)
 const uploading = ref(false)
 const deletingVideoId = ref<string | null>(null)
 const showAddSchedule = ref(false)
+const scheduleDialog = ref<HTMLDialogElement | null>(null)
+
+watch(showAddSchedule, async (open) => {
+  await nextTick()
+  if (open) {
+    if (!scheduleDialog.value?.open) scheduleDialog.value?.showModal()
+  } else {
+    scheduleDialog.value?.close()
+  }
+})
+
+function dismissScheduleBackdrop(event: MouseEvent) {
+  const dialog = scheduleDialog.value
+  if (!dialog || event.target !== dialog || scheduleSaving.value) return
+  const bounds = dialog.getBoundingClientRect()
+  if (
+    event.clientX < bounds.left || event.clientX > bounds.right
+    || event.clientY < bounds.top || event.clientY > bounds.bottom
+  ) {
+    showAddSchedule.value = false
+  }
+}
+
+function keepScheduleFocus(event: KeyboardEvent) {
+  if (event.key !== 'Tab') return
+  const dialog = scheduleDialog.value
+  if (!dialog) return
+  const controls = Array.from(dialog.querySelectorAll<HTMLElement>(
+    'button:not([disabled]), input:not([disabled]), select:not([disabled])',
+  ))
+  const first = controls[0]
+  const last = controls[controls.length - 1]
+  if (!first || !last) {
+    event.preventDefault()
+    return
+  }
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault()
+    last.focus()
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault()
+    first.focus()
+  }
+}
 const selectedVideo = ref('')
 const selectedDate = ref(new Date().toLocaleDateString('sv-SE'))
 const selectedTime = ref('15:00')
@@ -498,310 +542,150 @@ function openSchedule() {
 </script>
 
 <template>
-  <main class="min-h-screen bg-slate-50 text-slate-800">
-    <div class="mx-auto max-w-7xl px-5 py-8 md:px-8">
-      <header class="mb-8 flex flex-wrap items-center justify-between gap-4">
+  <main class="admin-page" data-theme="light">
+    <div class="admin-shell">
+      <header class="page-header">
         <div>
-
-          <h1 class="text-3xl font-bold tracking-tight">Video Control</h1>
-          <p class="mt-2 text-sm text-slate-500">
-            イベント映像と再生スケジュールを管理
-          </p>
+          <h1>Video Control</h1>
+          <p class="muted">動画と再生予定を管理</p>
         </div>
-
-        <button
-          class="rounded-xl bg-blue-600 px-5 py-3 text-sm font-semibold text-white shadow-sm hover:bg-blue-700"
-          @click="openSchedule"
-        >
-          ＋ 予定を追加
-        </button>
+        <button class="button button-primary" @click="openSchedule">予定を追加</button>
       </header>
 
-      <nav class="mb-7 flex gap-2 overflow-x-auto rounded-xl border border-slate-200 bg-white p-1.5">
+      <nav class="admin-tabs" aria-label="管理メニュー">
         <button
           v-for="tab in [
             { id: 'overview', label: '概要' },
             { id: 'videos', label: '動画ライブラリ' },
             { id: 'schedule', label: 'スケジュール' },
-        ]"
+          ]"
           :key="tab.id"
-          class="shrink-0 rounded-lg px-4 py-2.5 text-sm font-medium"
-          :class="activeTab === tab.id
-            ? 'bg-slate-900 text-white'
-            : 'text-slate-600 hover:bg-slate-100'"
+          :class="{ active: activeTab === tab.id }"
+          :aria-current="activeTab === tab.id ? 'page' : undefined"
           @click="activeTab = tab.id as typeof activeTab"
-        >
-          {{ tab.label }}
-        </button>
+        >{{ tab.label }}</button>
         <button
           v-if="canManageUsers"
-          class="shrink-0 rounded-lg px-4 py-2.5 text-sm font-medium"
-          :class="activeTab === 'users' ? 'bg-slate-900 text-white' : 'text-slate-600 hover:bg-slate-100'"
+          :class="{ active: activeTab === 'users' }"
+          :aria-current="activeTab === 'users' ? 'page' : undefined"
           @click="activeTab = 'users'; void loadUsers()"
-        >
-          ユーザー管理
-        </button>
+        >ユーザー管理</button>
       </nav>
 
-      <div
-        v-if="notice"
-        class="mb-5 flex items-center justify-between rounded-xl border px-4 py-3 text-sm"
-        :class="noticeIsError
-          ? 'border-red-200 bg-red-50 text-red-800'
-          : 'border-blue-200 bg-blue-50 text-blue-800'"
-      >
-        {{ notice }}
-        <button class="ml-4 font-bold" @click="notice = ''">×</button>
+      <div v-if="notice && !showAddSchedule" class="notice" :class="{ 'notice-error': noticeIsError }" :role="noticeIsError ? 'alert' : 'status'">
+        <span>{{ notice }}</span>
+        <button class="icon-button" aria-label="通知を閉じる" @click="notice = ''">×</button>
       </div>
 
       <template v-if="activeTab === 'overview'">
-        <section class="mb-7 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-          <article class="rounded-2xl border border-slate-200 bg-white p-5">
-            <p class="text-sm text-slate-500">登録動画</p>
-            <p class="mt-3 text-3xl font-bold">{{ videos.length }}</p>
-            <p class="mt-2 text-xs text-slate-400">ライブラリ内の動画</p>
+        <section class="stats" aria-label="管理状況">
+          <article>
+            <span class="muted">登録動画</span>
+            <strong>{{ videosLoading || videosError ? '—' : videos.length }}</strong>
           </article>
-
-          <article class="rounded-2xl border border-slate-200 bg-white p-5">
-            <p class="text-sm text-slate-500">再生予定</p>
-            <p class="mt-3 text-3xl font-bold">{{ upcomingCount }}</p>
-            <p class="mt-2 text-xs text-slate-400">取得した予約数</p>
+          <article>
+            <span class="muted">再生予定</span>
+            <strong>{{ schedulesLoading || schedulesError ? '—' : upcomingCount }}</strong>
           </article>
-
-          <article class="rounded-2xl border border-slate-200 bg-white p-5">
-            <p class="text-sm text-slate-500">保存容量</p>
-            <p class="mt-3 text-3xl font-bold">{{ (totalVideoBytes / (1024 * 1024)).toFixed(1) }} <span class="text-base font-medium text-slate-400">MiB</span></p>
-            <p class="mt-2 text-xs text-slate-400">登録済み動画サイズの合計</p>
+          <article>
+            <span class="muted">保存容量</span>
+            <strong>{{ videosLoading || videosError ? '—' : (totalVideoBytes / (1024 * 1024)).toFixed(1) }} <small v-if="!videosLoading && !videosError">MiB</small></strong>
           </article>
-
-          <article class="rounded-2xl border border-slate-200 bg-white p-5">
-            <p class="text-sm text-slate-500">未使用動画</p>
-            <p class="mt-3 text-3xl font-bold">{{ unusedVideoCount }}</p>
-            <button
-              class="mt-2 text-xs font-medium text-blue-600 hover:text-blue-800"
-              @click="activeTab = 'videos'; unusedOnly = true"
-            >
-              未使用動画を確認 →
-            </button>
+          <article>
+            <button class="text-button" @click="activeTab = 'videos'; unusedOnly = true">未使用動画 →</button>
+            <strong>{{ videosLoading || videosError ? '—' : unusedVideoCount }}</strong>
           </article>
         </section>
 
-
-
-        <section class="rounded-2xl border border-slate-200 bg-white p-6">
-          <div class="mb-4 flex items-center justify-between gap-3">
-            <h2 class="text-lg font-bold">直近のスケジュール</h2>
-            <button
-              class="text-sm font-semibold text-blue-600 hover:text-blue-800"
-              @click="activeTab = 'schedule'"
-            >
-              すべて表示 →
-            </button>
+        <section class="panel">
+          <div class="section-heading">
+            <h2>直近のスケジュール</h2>
+            <button class="text-button" @click="activeTab = 'schedule'">すべて表示 →</button>
           </div>
-
-          <p v-if="schedulesLoading" class="py-6 text-center text-slate-500">
-            スケジュールを読み込み中...
-          </p>
-          <p v-else-if="schedulesError" class="py-6 text-center text-red-600">
-            {{ schedulesError }}
-          </p>
-          <p v-else-if="schedules.length === 0" class="py-6 text-center text-slate-500">
-            スケジュールはありません。
-          </p>
-
-          <div v-else class="divide-y divide-slate-100">
-            <div
-              v-for="item in schedules.slice(0, 4)"
-              :key="item.id"
-              class="flex flex-wrap items-center justify-between gap-3 py-4"
-            >
-              <div>
-                <p class="font-medium">{{ videoTitle(item.videoId) }}</p>
-                <p class="mt-1 text-sm text-slate-500">
-                  {{ formatDateTime(item.startsAt) }}
-                </p>
-              </div>
-              <span class="rounded-full bg-blue-50 px-3 py-1 text-xs font-medium text-blue-700">
-                {{ item.status }}
-              </span>
+          <p v-if="videosError" class="state-message error" role="alert">{{ videosError }}</p>
+          <p v-if="schedulesLoading" class="state-message muted" role="status">スケジュールを読み込み中...</p>
+          <p v-else-if="schedulesError" class="state-message error" role="alert">{{ schedulesError }}</p>
+          <p v-else-if="schedules.length === 0" class="state-message muted">スケジュールはありません。</p>
+          <div v-else class="schedule-list">
+            <div v-for="item in schedules.slice(0, 5)" :key="item.id" class="schedule-row">
+              <time :datetime="item.startsAt">{{ formatDateTime(item.startsAt) }}</time>
+              <span class="item-title">{{ videoTitle(item.videoId) }}</span>
+              <span class="badge">{{ item.status }}</span>
             </div>
           </div>
         </section>
       </template>
 
       <template v-else-if="activeTab === 'videos'">
-        <section class="mb-6 rounded-2xl border border-slate-200 bg-white p-6">
-          <div class="mb-4 flex flex-wrap items-end justify-between gap-3">
+        <section class="panel">
+          <div class="section-heading">
             <div>
-              <h2 class="text-xl font-bold">動画をアップロード</h2>
-              <p class="mt-1 text-sm text-slate-500">
-                MP4 などの動画ファイルを登録します（最大 100 MiB）。
-              </p>
+              <h2>動画をアップロード</h2>
+              <p class="help">動画ファイル・最大 100 MiB</p>
             </div>
-            <p class="text-sm text-slate-600">
-              登録済み合計：{{ (totalVideoBytes / (1024 * 1024)).toFixed(1) }} MiB
-            </p>
+            <p class="help">登録済み合計：{{ videosLoading || videosError ? '—' : (totalVideoBytes / (1024 * 1024)).toFixed(1) }} MiB</p>
           </div>
-          <form class="grid gap-4 md:grid-cols-[1fr_1fr_auto] md:items-end" @submit.prevent="uploadVideo">
-            <label class="block text-sm font-medium">
-              動画名
-              <input
-                v-model="uploadTitle"
-                type="text"
-                maxlength="120"
-                required
-                class="mt-1.5 w-full rounded-xl border border-slate-200 px-4 py-2.5 font-normal"
-                placeholder="例：オープニング映像"
-              >
+          <form class="upload-form" @submit.prevent="uploadVideo">
+            <label class="field">
+              <span>動画名</span>
+              <input v-model="uploadTitle" type="text" maxlength="120" required placeholder="例：オープニング映像">
             </label>
-            <label class="block text-sm font-medium">
-              動画ファイル
-              <input
-                ref="uploadFileInput"
-                type="file"
-                accept="video/*"
-                required
-                class="mt-1.5 block w-full rounded-xl border border-slate-200 px-3 py-2 font-normal file:mr-3 file:rounded-lg file:border-0 file:bg-slate-100 file:px-3 file:py-1.5"
-                @change="selectUploadFile"
-              >
+            <label class="field">
+              <span>動画ファイル</span>
+              <input ref="uploadFileInput" type="file" accept="video/*" required @change="selectUploadFile">
             </label>
-            <button
-              type="submit"
-              :disabled="uploading || !uploadTitle.trim() || !uploadFile"
-              class="rounded-xl bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
-            >
+            <button type="submit" :disabled="uploading || !uploadTitle.trim() || !uploadFile" class="button button-primary">
               {{ uploading ? 'アップロード中...' : 'アップロード' }}
             </button>
           </form>
         </section>
 
-        <section class="rounded-2xl border border-slate-200 bg-white p-6">
-          <div class="mb-5 flex flex-wrap items-center justify-between gap-4">
-            <div>
-              <h2 class="text-xl font-bold">動画ライブラリ</h2>
-              <p class="mt-1 text-sm text-slate-500">
-                APIから取得した動画一覧
-              </p>
-            </div>
-            <div class="flex flex-wrap items-center gap-3">
-              <label class="flex items-center gap-2 text-sm text-slate-600">
-                <input v-model="unusedOnly" type="checkbox" class="checkbox checkbox-sm">
-                未使用のみ
-              </label>
-              <input
-                v-model="search"
-                type="search"
-                placeholder="動画を検索..."
-                class="w-full rounded-xl border border-slate-200 px-4 py-2.5 text-sm sm:w-64"
-              >
+        <section class="panel">
+          <div class="section-heading library-heading">
+            <h2>動画ライブラリ</h2>
+            <div class="library-filters">
+              <label class="check-field"><input v-model="unusedOnly" type="checkbox">未使用のみ</label>
+              <input v-model="search" type="search" aria-label="動画を検索" placeholder="動画を検索...">
             </div>
           </div>
-
-          <div class="overflow-x-auto">
-            <table class="w-full min-w-[640px] text-left text-sm">
-              <thead class="border-b border-slate-200 text-slate-500">
-                <tr>
-                  <th class="py-3 pr-4 font-medium">動画名</th>
-                  <th class="py-3 pr-4 font-medium">長さ</th>
-                  <th class="py-3 pr-4 font-medium">サイズ</th>
-                  <th class="py-3 font-medium">状態</th>
-                  <th class="py-3 pl-4 font-medium">操作</th>
-                </tr>
-              </thead>
-
-              <tbody class="divide-y divide-slate-100">
-                <tr v-if="videosLoading">
-                  <td colspan="5" class="py-8 text-center text-slate-500">
-                    動画一覧を読み込み中...
-                  </td>
-                </tr>
-                <tr v-else-if="videosError">
-                  <td colspan="5" class="py-8 text-center text-red-600">
-                    {{ videosError }}
-                  </td>
-                </tr>
-                <tr v-else-if="filteredVideos.length === 0">
-                  <td colspan="5" class="py-8 text-center text-slate-500">
-                    {{ unusedOnly || search ? '条件に一致する動画がありません。' : '動画が登録されていません。' }}
-                  </td>
-                </tr>
-                <tr v-for="video in !videosLoading && !videosError ? filteredVideos : []" :key="video.id">
-                  <td class="py-4 pr-4 font-medium">{{ video.title }}</td>
-                  <td class="py-4 pr-4 text-slate-500">不明</td>
-                  <td class="py-4 pr-4 text-slate-500">
-                    {{ (video.sizeBytes / (1024 * 1024)).toFixed(1) }} MB
-                  </td>
-                  <td class="py-4">
-                    <span class="rounded-full bg-emerald-50 px-2.5 py-1 text-xs text-emerald-700">
-                      登録済み
-                    </span>
-                  </td>
-                  <td class="py-4 pl-4">
-                    <button
-                      v-if="video.canDelete && video.isUnused"
-                      class="rounded-lg border border-red-200 px-3 py-1.5 text-xs font-medium text-red-700 hover:bg-red-50 disabled:opacity-50"
-                      :disabled="deletingVideoId !== null"
-                      @click="deleteVideo(video)"
-                    >
-                      {{ deletingVideoId === video.id ? '削除中...' : '削除' }}
-                    </button>
-                    <span v-else-if="video.canDelete" class="text-xs text-slate-400">予定あり</span>
-                    <span v-else class="text-xs text-slate-400">—</span>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
+          <table class="video-table">
+            <thead>
+              <tr><th scope="col">動画名</th><th scope="col">サイズ</th><th scope="col">状態</th><th scope="col" class="actions">操作</th></tr>
+            </thead>
+            <tbody>
+              <tr v-if="videosLoading"><td colspan="4" class="state-message muted" role="status">動画一覧を読み込み中...</td></tr>
+              <tr v-else-if="videosError"><td colspan="4" class="state-message error" role="alert">{{ videosError }}</td></tr>
+              <tr v-else-if="filteredVideos.length === 0"><td colspan="4" class="state-message muted">{{ unusedOnly || search ? '条件に一致する動画がありません。' : '動画が登録されていません。' }}</td></tr>
+              <tr v-for="video in !videosLoading && !videosError ? filteredVideos : []" :key="video.id" class="video-row">
+                <td class="item-title">{{ video.title }}</td>
+                <td data-label="サイズ" class="metadata">{{ (video.sizeBytes / (1024 * 1024)).toFixed(1) }} MiB</td>
+                <td data-label="状態"><span class="badge badge-neutral">{{ video.isUnused ? '未使用' : '予定あり' }}</span></td>
+                <td class="actions">
+                  <button v-if="video.canDelete && video.isUnused" class="button button-danger button-small" :disabled="deletingVideoId !== null" :aria-label="`${video.title}を削除`" @click="deleteVideo(video)">
+                    {{ deletingVideoId === video.id ? '削除中...' : '削除' }}
+                  </button>
+                  <span v-else-if="video.canDelete" class="help">予定あり</span>
+                  <span v-else class="help">—</span>
+                </td>
+              </tr>
+            </tbody>
+          </table>
         </section>
       </template>
 
       <template v-else-if="activeTab === 'schedule'">
-        <section class="rounded-2xl border border-slate-200 bg-white p-6">
-          <div class="mb-5 flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <h2 class="text-xl font-bold">スケジュール</h2>
-              <p class="mt-1 text-sm text-slate-500">
-                APIに保存された予約を表示しています。
-              </p>
-            </div>
-            <button
-              class="rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-700"
-              @click="openSchedule"
-            >
-              ＋ 予定を追加
-            </button>
-          </div>
-
-          <p v-if="schedulesLoading" class="py-8 text-center text-slate-500">
-            スケジュールを読み込み中...
-          </p>
-          <p v-else-if="schedulesError" class="py-8 text-center text-red-600">
-            {{ schedulesError }}
-          </p>
-          <p v-else-if="schedules.length === 0" class="py-8 text-center text-slate-500">
-            スケジュールがありません。
-          </p>
-
-          <div v-else class="divide-y divide-slate-100">
-            <div
-              v-for="item in schedules"
-              :key="item.id"
-              class="flex flex-wrap items-center justify-between gap-4 py-4"
-            >
-              <div>
-                <p class="font-semibold">{{ videoTitle(item.videoId) }}</p>
-                <p class="mt-1 text-sm text-slate-500">
-                  {{ formatDateTime(item.startsAt) }}
-                </p>
-              </div>
-              <div class="flex items-center gap-3">
-                <span class="text-xs text-slate-500">{{ item.status }}</span>
-                <button
-                  class="rounded-lg border border-slate-200 px-3 py-2 text-xs font-medium hover:bg-slate-50"
-                  @click="cancelSchedule(item.id)"
-                >
-                  キャンセル
-                </button>
+        <section class="panel">
+          <div class="section-heading"><h2>スケジュール</h2><span class="help">{{ schedulesLoading || schedulesError ? '—' : schedules.length }} 件</span></div>
+          <p v-if="schedulesLoading" class="state-message muted" role="status">スケジュールを読み込み中...</p>
+          <p v-else-if="schedulesError" class="state-message error" role="alert">{{ schedulesError }}</p>
+          <p v-else-if="schedules.length === 0" class="state-message muted">スケジュールがありません。「予定を追加」から登録できます。</p>
+          <div v-else class="schedule-list">
+            <div v-for="item in schedules" :key="item.id" class="schedule-row">
+              <time :datetime="item.startsAt">{{ formatDateTime(item.startsAt) }}</time>
+              <span class="item-title">{{ videoTitle(item.videoId) }}</span>
+              <div class="row-actions">
+                <span class="badge">{{ item.status }}</span>
+                <button class="button button-small" :aria-label="`${videoTitle(item.videoId)}の予約をキャンセル`" @click="cancelSchedule(item.id)">キャンセル</button>
               </div>
             </div>
           </div>
@@ -809,121 +693,200 @@ function openSchedule() {
       </template>
 
       <template v-else-if="activeTab === 'users' && canManageUsers">
-        <section class="mb-6 rounded-2xl border border-slate-200 bg-white p-6">
-          <h2 class="text-xl font-bold">ユーザーを登録</h2>
-          <p class="mt-2 text-sm text-slate-500">ここではAPI上の役割を登録します。管理ページへのログイン許可はCloudflare Accessの許可リストにも必要です。</p>
-          <form class="mt-4 grid gap-3 md:grid-cols-[1fr_12rem_auto]" @submit.prevent="addUser">
-            <input v-model="newUserEmail" type="email" required maxlength="254" placeholder="メンバーのメールアドレス" class="rounded-xl border border-slate-200 px-4 py-2.5">
-            <select v-model="newUserRole" class="rounded-xl border border-slate-200 bg-white px-3 py-2.5">
-              <option value="producer">動画制作担当</option>
-              <option value="operator">運用担当</option>
-              <option value="admin">管理者</option>
-            </select>
-            <button :disabled="savingUser" class="rounded-xl bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white disabled:opacity-50">{{ savingUser ? '登録中...' : '登録' }}</button>
+        <section class="panel">
+          <div class="section-heading"><h2>ユーザーを登録</h2></div>
+          <form class="user-form" @submit.prevent="addUser">
+            <label class="field"><span>メールアドレス</span><input v-model="newUserEmail" type="email" required maxlength="254" placeholder="メンバーのメールアドレス"></label>
+            <label class="field">
+              <span>役割</span>
+              <select v-model="newUserRole"><option value="producer">動画制作担当</option><option value="operator">運用担当</option><option value="admin">管理者</option></select>
+            </label>
+            <button :disabled="savingUser" class="button button-primary">{{ savingUser ? '登録中...' : '登録' }}</button>
           </form>
+          <p class="help access-help">ログイン許可には、Cloudflare Accessの許可リストへの追加も必要です。</p>
         </section>
-        <section class="rounded-2xl border border-slate-200 bg-white p-6">
-          <div class="flex items-center justify-between gap-3"><h2 class="text-xl font-bold">登録済みユーザー</h2><button class="text-sm text-blue-600" @click="void loadUsers()">再読み込み</button></div>
-          <p v-if="usersLoading" class="py-6 text-center text-slate-500">読み込み中...</p>
-          <p v-else-if="usersError" class="py-6 text-center text-red-600">{{ usersError }}</p>
-          <div v-else class="mt-4 divide-y divide-slate-100">
-            <div v-for="user in managedUsers" :key="user.id" class="flex flex-wrap items-center justify-between gap-3 py-3">
-              <span class="font-medium">{{ user.email }}</span>
-              <select :value="user.role" class="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm" @change="changeUserRole(user, $event)">
-                <option value="producer">動画制作担当</option><option value="operator">運用担当</option><option value="admin">管理者</option>
-              </select>
+        <section class="panel">
+          <div class="section-heading"><h2>登録済みユーザー</h2><button class="text-button" @click="void loadUsers()">再読み込み</button></div>
+          <p v-if="usersLoading" class="state-message muted" role="status">読み込み中...</p>
+          <p v-else-if="usersError" class="state-message error" role="alert">{{ usersError }}</p>
+          <div v-else class="user-list">
+            <div v-for="user in managedUsers" :key="user.id" class="user-row">
+              <span class="item-title">{{ user.email }}</span>
+              <select :value="user.role" :aria-label="`${user.email}の役割`" @change="changeUserRole(user, $event)"><option value="producer">動画制作担当</option><option value="operator">運用担当</option><option value="admin">管理者</option></select>
             </div>
-            <p v-if="!managedUsers.length" class="py-6 text-center text-slate-500">ユーザーがいません。</p>
+            <p v-if="!managedUsers.length" class="state-message muted">ユーザーがいません。</p>
           </div>
         </section>
       </template>
 
-      <footer class="mt-8 text-center text-xs text-slate-400">
-        Video Control · Cloudflareに保存 · 10G超えた状態で1ヶ月以上放置したらお金がかかります
-      </footer>
+      <footer class="page-footer">Video Control · Cloudflareに保存 · 10G超えた状態で1ヶ月以上放置したらお金がかかります</footer>
     </div>
 
-    <div
-      v-if="showAddSchedule"
-      class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4"
-      @click.self="!scheduleSaving && (showAddSchedule = false)"
-    >
-      <section class="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl">
-        <div class="mb-5 flex items-center justify-between">
-          <h2 class="text-xl font-bold">再生予定を追加</h2>
-          <button
-            class="rounded-lg px-3 py-1 text-xl text-slate-400 hover:bg-slate-100 disabled:opacity-50"
-            :disabled="scheduleSaving"
-            @click="showAddSchedule = false"
-          >
-            ×
-          </button>
+    <dialog ref="scheduleDialog" class="schedule-dialog" aria-labelledby="schedule-heading" @close="showAddSchedule = false" @cancel="scheduleSaving && $event.preventDefault()" @click="dismissScheduleBackdrop" @keydown="keepScheduleFocus">
+      <div class="section-heading">
+        <h2 id="schedule-heading">再生予定を追加</h2>
+        <button class="icon-button" aria-label="再生予定の追加を閉じる" :disabled="scheduleSaving" @click="showAddSchedule = false">×</button>
+      </div>
+      <div v-if="notice" class="notice" :class="{ 'notice-error': noticeIsError }" :role="noticeIsError ? 'alert' : 'status'">{{ notice }}</div>
+      <form class="schedule-form" @submit.prevent="addSchedule">
+        <label class="field">
+          <span>動画</span>
+          <select v-model="selectedVideo" required :disabled="videosLoading || videos.length === 0 || scheduleSaving">
+            <option value="" disabled>動画を選択してください</option>
+            <option v-for="video in videos" :key="video.id" :value="video.id">{{ video.title }}</option>
+          </select>
+          <span v-if="videosError" class="help error">{{ videosError }}</span>
+        </label>
+        <div class="date-time-fields">
+          <label class="field"><span>日付</span><input v-model="selectedDate" type="date" required :disabled="scheduleSaving"></label>
+          <label class="field"><span>開始時刻</span><input v-model="selectedTime" type="time" required :disabled="scheduleSaving"></label>
         </div>
-
-        <form class="space-y-4" @submit.prevent="addSchedule">
-          <label class="block">
-            <span class="mb-2 block text-sm font-medium">動画</span>
-            <select
-              v-model="selectedVideo"
-              required
-              :disabled="videosLoading || videos.length === 0 || scheduleSaving"
-              class="w-full rounded-xl border border-slate-200 bg-white px-3 py-3 text-sm disabled:bg-slate-100"
-            >
-              <option value="" disabled>動画を選択してください</option>
-              <option v-for="video in videos" :key="video.id" :value="video.id">
-                {{ video.title }}
-              </option>
-            </select>
-            <span v-if="videosError" class="mt-1 block text-xs text-red-600">
-              {{ videosError }}
-            </span>
-          </label>
-
-          <label class="block">
-            <span class="mb-2 block text-sm font-medium">日付</span>
-            <input
-              v-model="selectedDate"
-              type="date"
-              required
-              :disabled="scheduleSaving"
-              class="w-full rounded-xl border border-slate-200 px-3 py-3 text-sm disabled:bg-slate-100"
-            >
-          </label>
-
-          <label class="block">
-            <span class="mb-2 block text-sm font-medium">開始時刻</span>
-            <input
-              v-model="selectedTime"
-              type="time"
-              required
-              :disabled="scheduleSaving"
-              class="w-full rounded-xl border border-slate-200 px-3 py-3 text-sm disabled:bg-slate-100"
-            >
-          </label>
-
-          <p class="rounded-xl bg-amber-50 p-3 text-xs leading-5 text-amber-800">
-            開始時刻になると、メインページを開いている端末で動画を全画面再生します。ブラウザーの設定により最初の再生操作が必要な場合があります。
-          </p>
-
-          <div class="flex justify-end gap-3 pt-2">
-            <button
-              type="button"
-              :disabled="scheduleSaving"
-              class="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-medium hover:bg-slate-50 disabled:opacity-50"
-              @click="showAddSchedule = false"
-            >
-              戻る
-            </button>
-            <button
-              type="submit"
-              :disabled="scheduleSaving || videos.length === 0"
-              class="rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {{ scheduleSaving ? '保存中...' : '予定を追加' }}
-            </button>
-          </div>
-        </form>
-      </section>
-    </div>
+        <p class="help playback-help">開始時刻に、メインページを開いている端末で全画面再生します。ブラウザーによっては、最初に再生操作が必要です。</p>
+        <div class="dialog-actions">
+          <button type="button" :disabled="scheduleSaving" class="button" @click="showAddSchedule = false">戻る</button>
+          <button type="submit" :disabled="scheduleSaving || videos.length === 0" class="button button-primary">{{ scheduleSaving ? '保存中...' : '予定を追加' }}</button>
+        </div>
+      </form>
+    </dialog>
   </main>
 </template>
+
+<style scoped>
+.admin-page {
+  --admin-background: #f7f8fa;
+  --admin-surface: #fff;
+  --admin-text: #1f2937;
+  --admin-muted: #4b5563;
+  --admin-border: #d1d5db;
+  --admin-blue: #1d4ed8;
+  color-scheme: light;
+  min-height: 100dvh;
+  background: var(--admin-background);
+  color: var(--admin-text);
+  font-family: 'Noto Sans JP', sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+}
+.admin-shell { max-width: 1200px; margin: 0 auto; padding: 28px 32px; }
+.page-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 20px; }
+h1 { font-size: 24px; font-weight: 600; line-height: 1.4; }
+h2 { font-size: 18px; font-weight: 600; line-height: 1.5; }
+.page-header p { margin-top: 4px; }
+.muted, .help, .metadata { color: var(--admin-muted); }
+.help { font-size: 12px; line-height: 1.65; }
+.error { color: #b91c1c; }
+.admin-page :where(button, input, select) { font: inherit; color-scheme: light; }
+.admin-page input:not([type='checkbox']), .admin-page select {
+  display: block; width: 100%; min-width: 0; height: 40px; padding: 8px 10px;
+  color: var(--admin-text); background: var(--admin-surface);
+  border: 1px solid var(--admin-border); border-radius: 6px;
+}
+.admin-page input::placeholder { color: #6b7280; opacity: 1; }
+.admin-page input:disabled, .admin-page select:disabled { background: #f3f4f6; color: var(--admin-muted); cursor: not-allowed; opacity: 1; }
+.admin-page input[type='file'] { padding: 5px; font-size: 12px; }
+.admin-page input[type='file']::file-selector-button { margin-right: 8px; padding: 4px 8px; border: 0; border-radius: 4px; background: #eef2f6; color: var(--admin-text); font: inherit; cursor: pointer; }
+.admin-page input[type='checkbox'] { appearance: auto; width: 16px; height: 16px; margin: 0; accent-color: var(--admin-blue); background: white; flex-shrink: 0; }
+.admin-page :is(button, input, select):focus-visible { outline: 2px solid var(--admin-blue); outline-offset: 3px; }
+.admin-page button { cursor: pointer; }
+.admin-page button:disabled { cursor: not-allowed; }
+.button { display: inline-flex; align-items: center; justify-content: center; min-height: 40px; padding: 8px 14px; border: 1px solid var(--admin-border); border-radius: 6px; background: var(--admin-surface); color: var(--admin-text); font-weight: 500; white-space: nowrap; }
+.button:hover:not(:disabled) { background: #f3f4f6; }
+.button-primary { background: var(--admin-blue); border-color: var(--admin-blue); color: white; }
+.button-primary:hover:not(:disabled) { background: #1e40af; border-color: #1e40af; }
+.button:disabled { background: #eef2f6; border-color: var(--admin-border); color: #6b7280; }
+.button-small { min-height: 32px; padding: 5px 10px; font-size: 12px; }
+.button-danger { color: #b91c1c; }
+.button-danger:hover:not(:disabled) { background: #fef2f2; }
+.text-button { color: var(--admin-blue); background: transparent; border: 0; font-weight: 500; }
+.text-button:hover { text-decoration: underline; text-underline-offset: 3px; }
+.icon-button { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; flex-shrink: 0; border-radius: 6px; background: transparent; color: var(--admin-muted); font-size: 22px; }
+.icon-button:hover:not(:disabled) { background: #eef2f6; }
+.admin-tabs { display: flex; gap: 24px; margin-bottom: 20px; border-bottom: 1px solid var(--admin-border); overflow-x: auto; }
+.admin-tabs button { position: relative; padding: 10px 0 12px; flex-shrink: 0; background: transparent; color: var(--admin-muted); border-bottom: 2px solid transparent; font-weight: 500; }
+.admin-tabs button.active { color: var(--admin-blue); border-bottom-color: var(--admin-blue); }
+.admin-tabs button:hover { color: var(--admin-blue); }
+.admin-tabs button:focus-visible { outline-offset: -3px; }
+.panel { padding: 18px 20px; border: 1px solid var(--admin-border); border-radius: 8px; background: var(--admin-surface); }
+.panel + .panel { margin-top: 16px; }
+.section-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-bottom: 14px; }
+.section-heading .help { margin-top: 3px; }
+.stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin-bottom: 20px; padding: 16px 0; border: 1px solid var(--admin-border); border-radius: 8px; background: var(--admin-surface); }
+.stats article { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; padding: 0 20px; border-right: 1px solid var(--admin-border); }
+.stats article:last-child { border-right: 0; }
+.stats strong { font-size: 26px; font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1.3; }
+.stats small { font-size: 12px; font-weight: 400; color: var(--admin-muted); }
+.field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.field > span:first-child { font-weight: 500; }
+.upload-form { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; gap: 14px; align-items: end; }
+.library-filters { display: flex; gap: 16px; align-items: center; }
+.check-field { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
+.library-filters input[type='search'] { width: 240px; }
+.video-table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+.video-table th { padding: 8px 12px 8px 0; text-align: left; color: var(--admin-muted); font-weight: 400; font-size: 12px; border-bottom: 1px solid var(--admin-border); }
+.video-table th:first-child { width: 55%; }
+.video-table th:last-child { width: 100px; }
+.video-table td { padding: 10px 12px 10px 0; border-bottom: 1px solid #e5e7eb; vertical-align: middle; }
+.video-table tr:last-child td { border-bottom: 0; }
+.video-table .actions { padding-right: 0; text-align: right; }
+.item-title { min-width: 0; overflow-wrap: anywhere; font-weight: 500; }
+.metadata { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.badge { display: inline-flex; align-items: center; height: auto; min-height: 24px; padding: 2px 7px; background: #eff6ff; color: var(--admin-blue); border: 0; border-radius: 4px; font-size: 12px; white-space: nowrap; }
+.badge-neutral { background: #f3f4f6; color: var(--admin-muted); }
+.state-message { padding: 24px 0 !important; text-align: center; overflow-wrap: anywhere; }
+.schedule-row { display: grid; grid-template-columns: 155px minmax(0, 1fr) auto; gap: 16px; align-items: center; padding: 12px 0; border-bottom: 1px solid #e5e7eb; }
+.schedule-row:last-child { border-bottom: 0; }
+.schedule-row time { font-size: 13px; color: var(--admin-muted); font-variant-numeric: tabular-nums; }
+.row-actions { display: flex; align-items: center; gap: 12px; }
+.user-form { display: grid; grid-template-columns: minmax(0, 1fr) 180px auto; gap: 14px; align-items: end; }
+.access-help { margin-top: 10px; }
+.user-row { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 10px 0; border-bottom: 1px solid #e5e7eb; }
+.user-row:last-child { border-bottom: 0; }
+.user-row select { width: 180px; flex-shrink: 0; }
+.notice { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 16px; padding: 10px 12px; border: 1px solid #bfdbfe; border-radius: 6px; background: #eff6ff; color: #1e40af; overflow-wrap: anywhere; }
+.notice-error { border-color: #fecaca; background: #fef2f2; color: #b91c1c; }
+.page-footer { margin-top: 24px; color: var(--admin-muted); font-size: 11px; }
+.schedule-dialog { width: min(460px, calc(100% - 32px)); max-height: calc(100dvh - 32px); margin: auto; padding: 20px; overflow-y: auto; border: 1px solid var(--admin-border); border-radius: 8px; background: var(--admin-surface); color: var(--admin-text); box-shadow: 0 12px 40px #11182726; }
+.schedule-dialog::backdrop { background: #11182766; }
+.schedule-form { display: flex; flex-direction: column; gap: 16px; }
+.date-time-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.playback-help { padding-top: 12px; border-top: 1px solid #e5e7eb; }
+.dialog-actions { display: flex; justify-content: flex-end; gap: 10px; }
+@media (max-width: 767px) {
+  .admin-shell { padding: 20px 16px; }
+  .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); padding: 0; }
+  .stats article { padding: 14px 16px; }
+  .stats article:nth-child(2) { border-right: 0; }
+  .stats article:nth-child(-n+2) { border-bottom: 1px solid var(--admin-border); }
+  .upload-form, .user-form { grid-template-columns: minmax(0, 1fr); }
+  .upload-form > .button, .user-form > .button { justify-self: start; }
+  .video-table th:first-child { width: 45%; }
+  .schedule-row { grid-template-columns: minmax(0, 1fr) auto; gap: 6px 12px; }
+  .schedule-row time { grid-column: 1 / -1; }
+}
+@media (max-width: 600px) {
+  .panel { padding: 16px; }
+  .admin-tabs { gap: 12px; }
+  .library-heading, .library-filters { align-items: stretch; width: 100%; }
+  .library-filters { flex-wrap: wrap; gap: 12px; }
+  .library-filters input[type='search'] { width: 100%; }
+  .video-table thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+  .video-table tbody { display: block; }
+  .video-table tr { display: block; padding: 12px 0; border-bottom: 1px solid #e5e7eb; }
+  .video-table tr:last-child { border-bottom: 0; }
+  .video-table td { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 4px 0; border: 0; }
+  .video-table td.item-title { display: block; margin-bottom: 6px; }
+  .video-table td[data-label]::before { content: attr(data-label); color: var(--admin-muted); font-size: 12px; }
+  .video-table td.actions { justify-content: flex-end; }
+  .video-table td.state-message { display: block; }
+  .schedule-row { grid-template-columns: minmax(0, 1fr); gap: 8px; }
+  .schedule-row time { grid-column: auto; }
+  .row-actions { justify-content: space-between; }
+  .user-row { align-items: flex-start; flex-direction: column; gap: 8px; }
+  .user-row select { width: 100%; }
+}
+@media (max-width: 359px) {
+  .admin-tabs { gap: 6px; font-size: 12px; }
+  .page-header { align-items: flex-start; flex-direction: column; }
+  .date-time-fields { grid-template-columns: minmax(0, 1fr); }
+}
+</style>
