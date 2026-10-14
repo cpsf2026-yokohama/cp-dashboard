@@ -1,0 +1,367 @@
+
+<script setup lang="ts">
+import { computed, ref } from 'vue'
+
+type Video = {
+  id: string
+  title: string
+  duration: string
+  size: string
+  status: '登録済み' | '準備中'
+}
+
+type Schedule = {
+  id: number
+  videoId: string
+  time: string
+  date: string
+  status: '予約済み' | '再生済み' | 'キャンセル'
+}
+
+const activeTab = ref<'overview' | 'videos' | 'schedule'>('overview')
+const search = ref('')
+const showAddSchedule = ref(false)
+const selectedVideo = ref('video-001')
+const selectedDate = ref(new Date().toISOString().slice(0, 10))
+const selectedTime = ref('15:00')
+const notice = ref('')
+
+const videos = ref<Video[]>([
+  { id: 'video-001', title: 'オープニング映像', duration: '00:45', size: '128 MB', status: '登録済み' },
+  { id: 'video-002', title: 'イベント案内', duration: '01:30', size: '246 MB', status: '登録済み' },
+  { id: 'video-003', title: '休憩時間のお知らせ', duration: '00:20', size: '54 MB', status: '登録済み' },
+  { id: 'video-004', title: 'エンディング映像', duration: '02:15', size: '380 MB', status: '準備中' },
+])
+
+const schedules = ref<Schedule[]>([
+  { id: 1, videoId: 'video-001', date: selectedDate.value, time: '14:00', status: '再生済み' },
+  { id: 2, videoId: 'video-002', date: selectedDate.value, time: '15:00', status: '予約済み' },
+  { id: 3, videoId: 'video-003', date: selectedDate.value, time: '15:30', status: '予約済み' },
+  { id: 4, videoId: 'video-004', date: selectedDate.value, time: '16:00', status: '予約済み' },
+])
+
+const filteredVideos = computed(() => {
+  const q = search.value.trim().toLowerCase()
+  return videos.value.filter(v => v.title.toLowerCase().includes(q))
+})
+
+const upcomingCount = computed(
+  () => schedules.value.filter(s => s.status === '予約済み').length,
+)
+
+function videoTitle(id: string) {
+  return videos.value.find(v => v.id === id)?.title ?? '不明な動画'
+}
+
+function addSchedule() {
+  if (!selectedVideo.value || !selectedDate.value || !selectedTime.value) return
+
+  const conflict = schedules.value.some(
+    s => s.date === selectedDate.value &&
+      s.time === selectedTime.value &&
+      s.status === '予約済み',
+  )
+
+  if (conflict) {
+    notice.value = '同じ時刻に予約があります。時刻を変更してください。'
+    return
+  }
+
+  schedules.value.push({
+    id: Date.now(),
+    videoId: selectedVideo.value,
+    date: selectedDate.value,
+    time: selectedTime.value,
+    status: '予約済み',
+  })
+
+  schedules.value.sort((a, b) =>
+    `${a.date} ${a.time}`.localeCompare(`${b.date} ${b.time}`),
+  )
+
+  showAddSchedule.value = false
+  notice.value = 'プロトタイプに予定を追加しました。'
+}
+
+function cancelSchedule(id: number) {
+  const item = schedules.value.find(s => s.id === id)
+  if (item?.status === '予約済み') {
+    item.status = 'キャンセル'
+    notice.value = '予定をキャンセルしました。'
+  }
+}
+
+function openSchedule() {
+  notice.value = ''
+  showAddSchedule.value = true
+}
+</script>
+
+<template>
+  <main class="min-h-screen bg-slate-50 text-slate-800">
+    <div class="mx-auto max-w-7xl px-5 py-8 md:px-8">
+      <header class="mb-8 flex flex-wrap items-center justify-between gap-4">
+        <div>
+          <div class="mb-2 flex items-center gap-2 text-sm text-slate-500">
+            <span class="h-2 w-2 rounded-full bg-emerald-500"></span>
+            ローカルプロトタイプ
+          </div>
+          <h1 class="text-3xl font-bold tracking-tight">Video Control</h1>
+          <p class="mt-2 text-sm text-slate-500">
+            イベント映像と再生スケジュールを管理
+          </p>
+        </div>
+
+        <button
+          class="rounded-xl bg-blue-600 px-5 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700"
+          @click="openSchedule"
+        >
+          ＋ 予定を追加
+        </button>
+      </header>
+
+      <nav class="mb-7 flex gap-2 overflow-x-auto rounded-xl border border-slate-200 bg-white p-1.5">
+        <button
+          v-for="tab in [
+            { id: 'overview', label: '概要' },
+            { id: 'videos', label: '動画ライブラリ' },
+            { id: 'schedule', label: 'スケジュール' },
+          ]"
+          :key="tab.id"
+          class="shrink-0 rounded-lg px-4 py-2.5 text-sm font-medium transition"
+          :class="activeTab === tab.id
+            ? 'bg-slate-900 text-white'
+            : 'text-slate-600 hover:bg-slate-100'"
+          @click="activeTab = tab.id as typeof activeTab"
+        >
+          {{ tab.label }}
+        </button>
+      </nav>
+
+      <div
+        v-if="notice"
+        class="mb-5 flex items-center justify-between rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800"
+      >
+        {{ notice }}
+        <button class="ml-4 font-bold" @click="notice = ''">×</button>
+      </div>
+
+      <template v-if="activeTab === 'overview'">
+        <section class="mb-7 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          <article class="rounded-2xl border border-slate-200 bg-white p-5">
+            <p class="text-sm text-slate-500">登録動画</p>
+            <p class="mt-3 text-3xl font-bold">{{ videos.length }}</p>
+            <p class="mt-2 text-xs text-slate-400">ライブラリ内の動画</p>
+          </article>
+          <article class="rounded-2xl border border-slate-200 bg-white p-5">
+            <p class="text-sm text-slate-500">再生予定</p>
+            <p class="mt-3 text-3xl font-bold">{{ upcomingCount }}</p>
+            <p class="mt-2 text-xs text-slate-400">予約済みのスケジュール</p>
+          </article>
+          <article class="rounded-2xl border border-slate-200 bg-white p-5">
+            <p class="text-sm text-slate-500">接続端末</p>
+            <p class="mt-3 text-3xl font-bold">2 <span class="text-base font-medium text-slate-400">台</span></p>
+            <p class="mt-2 text-xs text-slate-400">仮の表示・未接続確認</p>
+          </article>
+          <article class="rounded-2xl border border-slate-200 bg-white p-5">
+            <p class="text-sm text-slate-500">システム状態</p>
+            <p class="mt-3 flex items-center gap-2 text-xl font-bold">
+              <span class="h-2.5 w-2.5 rounded-full bg-amber-400"></span>
+              デモモード
+            </p>
+            <p class="mt-2 text-xs text-slate-400">実際の端末状態ではありません</p>
+          </article>
+        </section>
+
+        <section class="mb-7 rounded-2xl border border-slate-200 bg-white p-6">
+          <div class="mb-5 flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 class="text-lg font-bold">端末ステータス</h2>
+              <p class="mt-1 text-sm text-slate-500">再生端末の表示イメージ</p>
+            </div>
+            <span class="rounded-full bg-amber-50 px-3 py-1 text-xs font-medium text-amber-700">
+              デモデータ
+            </span>
+          </div>
+
+          <div class="grid gap-4 md:grid-cols-2">
+            <div class="rounded-xl border border-slate-200 p-4">
+              <div class="flex items-center justify-between">
+                <span class="font-semibold">再生端末 A</span>
+                <span class="text-xs text-slate-500">状態未確認</span>
+              </div>
+              <p class="mt-3 text-sm text-slate-500">次の予定</p>
+              <p class="mt-1 font-medium">イベント案内</p>
+              <p class="mt-1 text-sm text-slate-500">15:00</p>
+            </div>
+            <div class="rounded-xl border border-slate-200 p-4">
+              <div class="flex items-center justify-between">
+                <span class="font-semibold">再生端末 B</span>
+                <span class="text-xs text-slate-500">状態未確認</span>
+              </div>
+              <p class="mt-3 text-sm text-slate-500">次の予定</p>
+              <p class="mt-1 font-medium">イベント案内</p>
+              <p class="mt-1 text-sm text-slate-500">15:00</p>
+            </div>
+          </div>
+        </section>
+
+        <section class="rounded-2xl border border-slate-200 bg-white p-6">
+          <div class="mb-4 flex items-center justify-between gap-3">
+            <h2 class="text-lg font-bold">直近のスケジュール</h2>
+            <button class="text-sm font-semibold text-blue-600 hover:text-blue-800" @click="activeTab = 'schedule'">
+              すべて表示 →
+            </button>
+          </div>
+          <div class="divide-y divide-slate-100">
+            <div
+              v-for="item in schedules.slice(0, 4)"
+              :key="item.id"
+              class="flex flex-wrap items-center justify-between gap-3 py-4"
+            >
+              <div>
+                <p class="font-medium">{{ videoTitle(item.videoId) }}</p>
+                <p class="mt-1 text-sm text-slate-500">{{ item.date }} · {{ item.time }}</p>
+              </div>
+              <span
+                class="rounded-full px-3 py-1 text-xs font-medium"
+                :class="{
+                  'bg-blue-50 text-blue-700': item.status === '予約済み',
+                  'bg-emerald-50 text-emerald-700': item.status === '再生済み',
+                  'bg-slate-100 text-slate-500': item.status === 'キャンセル',
+                }"
+              >
+                {{ item.status }}
+              </span>
+            </div>
+          </div>
+        </section>
+      </template>
+
+      <template v-else-if="activeTab === 'videos'">
+        <section class="rounded-2xl border border-slate-200 bg-white p-6">
+          <div class="mb-5 flex flex-wrap items-center justify-between gap-4">
+            <div>
+              <h2 class="text-xl font-bold">動画ライブラリ</h2>
+              <p class="mt-1 text-sm text-slate-500">現在はサンプルデータを表示しています。</p>
+            </div>
+            <input
+              v-model="search"
+              type="search"
+              placeholder="動画を検索..."
+              class="w-full rounded-xl border border-slate-200 px-4 py-2.5 text-sm outline-none focus:border-blue-500 sm:w-64"
+            />
+          </div>
+
+          <div class="overflow-x-auto">
+            <table class="w-full min-w-[560px] text-left text-sm">
+              <thead class="border-b border-slate-200 text-slate-500">
+                <tr>
+                  <th class="py-3 pr-4 font-medium">動画名</th>
+                  <th class="py-3 pr-4 font-medium">長さ</th>
+                  <th class="py-3 pr-4 font-medium">サイズ</th>
+                  <th class="py-3 font-medium">状態</th>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-slate-100">
+                <tr v-for="video in filteredVideos" :key="video.id">
+                  <td class="py-4 pr-4 font-medium">{{ video.title }}</td>
+                  <td class="py-4 pr-4 text-slate-500">{{ video.duration }}</td>
+                  <td class="py-4 pr-4 text-slate-500">{{ video.size }}</td>
+                  <td class="py-4">
+                    <span class="rounded-full bg-emerald-50 px-2.5 py-1 text-xs text-emerald-700">
+                      {{ video.status }}
+                    </span>
+                  </td>
+                </tr>
+                <tr v-if="filteredVideos.length === 0">
+                  <td colspan="4" class="py-8 text-center text-slate-500">該当する動画がありません。</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </template>
+
+      <template v-else>
+        <section class="rounded-2xl border border-slate-200 bg-white p-6">
+          <div class="mb-5 flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 class="text-xl font-bold">スケジュール</h2>
+              <p class="mt-1 text-sm text-slate-500">予定の追加とキャンセルを試せます。</p>
+            </div>
+            <button class="rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-700" @click="openSchedule">
+              ＋ 予定を追加
+            </button>
+          </div>
+
+          <div class="divide-y divide-slate-100">
+            <div v-for="item in schedules" :key="item.id" class="flex flex-wrap items-center justify-between gap-4 py-4">
+              <div>
+                <p class="font-semibold">{{ videoTitle(item.videoId) }}</p>
+                <p class="mt-1 text-sm text-slate-500">{{ item.date }} · {{ item.time }}</p>
+              </div>
+              <div class="flex items-center gap-3">
+                <span class="text-xs text-slate-500">{{ item.status }}</span>
+                <button
+                  v-if="item.status === '予約済み'"
+                  class="rounded-lg border border-slate-200 px-3 py-2 text-xs font-medium hover:bg-slate-50"
+                  @click="cancelSchedule(item.id)"
+                >
+                  キャンセル
+                </button>
+              </div>
+            </div>
+          </div>
+        </section>
+      </template>
+
+      <footer class="mt-8 text-center text-xs text-slate-400">
+        Video Control · Prototype · データは保存されません
+      </footer>
+    </div>
+
+    <div v-if="showAddSchedule" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4" @click.self="showAddSchedule = false">
+      <section class="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl">
+        <div class="mb-5 flex items-center justify-between">
+          <h2 class="text-xl font-bold">再生予定を追加</h2>
+          <button class="rounded-lg px-3 py-1 text-xl text-slate-400 hover:bg-slate-100" @click="showAddSchedule = false">×</button>
+        </div>
+
+        <form class="space-y-4" @submit.prevent="addSchedule">
+          <label class="block">
+            <span class="mb-2 block text-sm font-medium">動画</span>
+            <select v-model="selectedVideo" required class="w-full rounded-xl border border-slate-200 bg-white px-3 py-3 text-sm">
+              <option v-for="video in videos" :key="video.id" :value="video.id">
+                {{ video.title }}
+              </option>
+            </select>
+          </label>
+
+          <label class="block">
+            <span class="mb-2 block text-sm font-medium">日付</span>
+            <input v-model="selectedDate" type="date" required class="w-full rounded-xl border border-slate-200 px-3 py-3 text-sm" />
+          </label>
+
+          <label class="block">
+            <span class="mb-2 block text-sm font-medium">開始時刻</span>
+            <input v-model="selectedTime" type="time" required class="w-full rounded-xl border border-slate-200 px-3 py-3 text-sm" />
+          </label>
+
+          <p class="rounded-xl bg-amber-50 p-3 text-xs leading-5 text-amber-800">
+            これは画面確認用です。実際の端末への配信・再生予約は行いません。
+          </p>
+
+          <div class="flex justify-end gap-3 pt-2">
+            <button type="button" class="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-medium hover:bg-slate-50" @click="showAddSchedule = false">
+              戻る
+            </button>
+            <button type="submit" class="rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-700">
+              予定を追加
+            </button>
+          </div>
+        </form>
+      </section>
+    </div>
+  </main>
+</template>

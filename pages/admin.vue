@@ -234,7 +234,6 @@ async function loadSchedules() {
 
     schedules.value = data.schedules
       .map(toSchedule)
-      .filter(item => Date.parse(item.startsAt) > Date.now())
       .sort((a, b) => a.startsAt.localeCompare(b.startsAt))
   } catch (error) {
     console.error('Failed to load schedules:', error)

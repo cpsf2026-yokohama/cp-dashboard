@@ -1,0 +1,210 @@
+interface Env {
+  DB: D1Database;
+  VIDEO_BUCKET: R2Bucket;
+}
+
+const allowedOrigin = "http://localhost:3000";
+const localAdminId = "local-test-admin";
+
+function withCors(response: Response, origin: string | null): Response {
+  const headers = new Headers(response.headers);
+
+  if (origin === allowedOrigin) {
+    headers.set("Access-Control-Allow-Origin", allowedOrigin);
+    headers.set(
+      "Access-Control-Allow-Methods",
+      "GET, POST, DELETE, OPTIONS",
+    );
+    headers.set("Access-Control-Allow-Headers", "Content-Type");
+    headers.set("Vary", "Origin");
+  }
+
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
+
+function jsonError(message: string, status: number): Response {
+  return Response.json({ error: message }, { status });
+}
+
+export default {
+  async fetch(request: Request, env: Env): Promise<Response> {
+    const origin = request.headers.get("Origin");
+    const url = new URL(request.url);
+
+    let response: Response;
+
+    if (request.method === "OPTIONS") {
+      response = new Response(null, { status: 204 });
+    } else if (
+      request.method === "GET" &&
+      url.pathname === "/api/health"
+    ) {
+      try {
+        await env.DB.prepare("SELECT 1").first();
+
+        response = Response.json({
+          status: "ok",
+          database: "connected",
+        });
+      } catch (error) {
+        console.error("Database health check failed:", error);
+        response = jsonError("Database unavailable", 500);
+      }
+    } else if (
+      request.method === "GET" &&
+      url.pathname === "/api/schedule"
+    ) {
+      try {
+        const now = new Date();
+        const windowStart = new Date(
+          now.getTime() - 10_000,
+        ).toISOString();
+        const windowEnd = new Date(
+          now.getTime() + 5_000,
+        ).toISOString();
+
+        const result = await env.DB.prepare(`
+          SELECT
+            s.id AS scheduleId,
+            s.video_id AS videoId,
+            v.title AS title,
+            s.starts_at AS startsAt
+          FROM schedules s
+          JOIN videos v ON v.id = s.video_id
+          WHERE s.starts_at > ?
+            AND s.starts_at <= ?
+          ORDER BY s.starts_at ASC
+        `)
+          .bind(windowStart, windowEnd)
+          .all();
+
+        response = Response.json({
+          serverTime: now.toISOString(),
+          schedules: result.results,
+        });
+      } catch (error) {
+        console.error("Failed to retrieve playback schedule:", error);
+        response = jsonError("Failed to retrieve schedule", 500);
+      }
+    } else if (
+      request.method === "GET" &&
+      url.pathname === "/api/schedules"
+    ) {
+      try {
+        const result = await env.DB.prepare(`
+          SELECT
+            s.id AS id,
+            s.video_id AS videoId,
+            v.title AS title,
+            s.starts_at AS startsAt,
+            s.created_by AS createdBy
+          FROM schedules s
+          JOIN videos v ON v.id = s.video_id
+          ORDER BY s.starts_at ASC
+        `).all();
+
+        response = Response.json({
+          schedules: result.results,
+        });
+      } catch (error) {
+        console.error("Failed to retrieve schedules:", error);
+        response = jsonError("Failed to retrieve schedules", 500);
+      }
+    } else if (
+      request.method === "POST" &&
+      url.pathname === "/api/schedules"
+    ) {
+      try {
+        const body: unknown = await request.json();
+
+        if (
+          typeof body !== "object" ||
+          body === null ||
+          !("videoId" in body) ||
+          !("startsAt" in body) ||
+          typeof body.videoId !== "string" ||
+          typeof body.startsAt !== "string" ||
+          body.videoId.trim() === "" ||
+          body.startsAt.trim() === ""
+        ) {
+          response = jsonError(
+            "videoId and startsAt are required",
+            400,
+          );
+        } else {
+          const startsAtDate = new Date(body.startsAt);
+
+          if (Number.isNaN(startsAtDate.getTime())) {
+            response = jsonError("Invalid startsAt", 400);
+          } else {
+            const video = await env.DB.prepare(`
+              SELECT id
+              FROM videos
+              WHERE id = ?
+            `)
+              .bind(body.videoId)
+              .first();
+
+            if (!video) {
+              response = jsonError("Video not found", 404);
+            } else {
+              const admin = await env.DB.prepare(`
+                SELECT id
+                FROM users
+                WHERE id = ? AND role = 'admin'
+              `)
+                .bind(localAdminId)
+                .first();
+
+              if (!admin) {
+                response = jsonError(
+                  "Local test admin not found",
+                  500,
+                );
+              } else {
+                const id = crypto.randomUUID();
+                const normalizedStartsAt =
+                  startsAtDate.toISOString();
+
+                await env.DB.prepare(`
+                  INSERT INTO schedules (
+                    id,
+                    video_id,
+                    starts_at,
+                    created_by
+                  )
+                  VALUES (?, ?, ?, ?)
+                `)
+                  .bind(
+                    id,
+                    body.videoId,
+                    normalizedStartsAt,
+                    localAdminId,
+                  )
+                  .run();
+
+                response = Response.json(
+                  {
+                    schedule: {
+                      id,
+                      videoId: body.videoId,
+                      startsAt: normalizedStartsAt,
+                      createdBy: localAdminId,
+                    },
+                  },
+                  { status: 201 },
+                );
+              }
+            }
+          }
+        }
+      } catch (error) {
+        console.error("Failed to create schedule:", error);
+        response = jsonError("Failed to create schedule", 500);
+      }
+    } else if (
+      request.method === "DELETE" &&

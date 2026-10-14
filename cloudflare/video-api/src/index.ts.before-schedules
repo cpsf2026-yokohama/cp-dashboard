@@ -1,0 +1,111 @@
+interface Env {
+  DB: D1Database;
+  VIDEO_BUCKET: R2Bucket;
+}
+
+const allowedOrigin = "http://localhost:3000";
+
+function withCors(response: Response, origin: string | null): Response {
+  const headers = new Headers(response.headers);
+
+  if (origin === allowedOrigin) {
+    headers.set("Access-Control-Allow-Origin", allowedOrigin);
+    headers.set("Access-Control-Allow-Methods", "GET, OPTIONS");
+    headers.set("Access-Control-Allow-Headers", "Content-Type");
+    headers.set("Vary", "Origin");
+  }
+
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
+
+function jsonError(message: string, status: number): Response {
+  return Response.json({ error: message }, { status });
+}
+
+export default {
+  async fetch(request: Request, env: Env): Promise<Response> {
+    const origin = request.headers.get("Origin");
+    const url = new URL(request.url);
+
+    let response: Response;
+
+    if (request.method === "OPTIONS") {
+      response = new Response(null, { status: 204 });
+    } else if (
+      request.method === "GET" &&
+      url.pathname === "/api/health"
+    ) {
+      try {
+        await env.DB.prepare("SELECT 1").first();
+
+        response = Response.json({
+          status: "ok",
+          database: "connected",
+        });
+      } catch {
+        response = jsonError("Database unavailable", 500);
+      }
+    } else if (
+      request.method === "GET" &&
+      url.pathname === "/api/schedule"
+    ) {
+      try {
+        const now = new Date();
+        const windowStart = new Date(now.getTime() - 10_000).toISOString();
+        const windowEnd = new Date(now.getTime() + 5_000).toISOString();
+
+        const result = await env.DB.prepare(`
+          SELECT
+            s.id AS scheduleId,
+            s.video_id AS videoId,
+            v.title AS title,
+            s.starts_at AS startsAt
+          FROM schedules s
+          JOIN videos v ON v.id = s.video_id
+          WHERE s.starts_at > ?
+            AND s.starts_at <= ?
+          ORDER BY s.starts_at ASC
+        `)
+          .bind(windowStart, windowEnd)
+          .all();
+
+        response = Response.json({
+          serverTime: now.toISOString(),
+          schedules: result.results,
+        });
+      } catch (error) {
+        console.error("Failed to retrieve schedule:", error);
+        response = jsonError("Failed to retrieve schedule", 500);
+      }
+    } else if (
+      request.method === "GET" &&
+      url.pathname === "/api/videos"
+    ) {
+      try {
+        const result = await env.DB.prepare(`
+          SELECT
+            id,
+            title,
+            content_type AS contentType,
+            size_bytes AS sizeBytes,
+            created_at AS createdAt
+          FROM videos
+          ORDER BY created_at DESC
+        `).all();
+
+        response = Response.json({ videos: result.results });
+      } catch (error) {
+        console.error("Failed to retrieve videos:", error);
+        response = jsonError("Failed to retrieve videos", 500);
+      }
+    } else {
+      response = jsonError("Not Found", 404);
+    }
+
+    return withCors(response, origin);
+  },
+};
