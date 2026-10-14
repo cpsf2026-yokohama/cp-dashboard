@@ -37,6 +37,7 @@ export default defineNuxtConfig({
     families: {
       "M PLUS Rounded 1c": [400, 700],
       "Inter": "100..900",
+      "Noto Sans JP": [400, 500, 600],
     },
     download: false
   },

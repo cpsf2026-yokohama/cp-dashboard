@@ -15,6 +15,24 @@ const timeState = time();
 const clockEffectState = clockEffect();
 // タイマーの残り時間
 const timerState = timer();
+const rollingDown = ref(timerState.value !== null);
+
+watch(timerState, (remainingTime) => {
+  if (remainingTime !== null) {
+    rollingDown.value = true;
+  }
+});
+
+const mainClock = computed(() => {
+  const currentTime = timerState.value ?? [
+    dayjs(timeState.value).hour(),
+    dayjs(timeState.value).minute(),
+    dayjs(timeState.value).second(),
+  ];
+
+  return currentTime.map((value) => value.toString().padStart(2, "0"));
+});
+const mainClockText = computed(() => mainClock.value.join(":"));
 
 // 設定されているフォントサイズオフセット
 const fontSizeOffset = fontSize();
@@ -64,14 +82,17 @@ watch(wScreen, () => {
     <h1
       v-if="clockEffectState == 'シンプル' || clockEffectState == '自動 (端末に最適化)' && ($device.isSafari || $device.isFirefox)"
       class="main-clock font-bold leading-none tabular-nums">
-      {{ timerState != null ? 
-        `${timerState[0].toString().padStart(2, "0")}:${timerState[1].toString().padStart(2,"0")}:${timerState[2].toString().padStart(2, "0")}`
-        : dayjs(timeState).format('HH:mm:ss') }}
+      {{ mainClockText }}
     </h1>
-    <h1 v-else class="countdown main-clock font-bold">
-      <span :style="{ '--value': timerState != null ? timerState[0] : dayjs(timeState).hour() }"></span>:
-      <span :style="{ '--value': timerState != null ? timerState[1] : dayjs(timeState).minute() }"></span>:
-      <span :style="{ '--value': timerState != null ? timerState[2] : dayjs(timeState).second() }"></span>
+    <h1 v-else class="main-clock font-bold leading-none tabular-nums rolling-clock" :aria-label="mainClockText">
+      <template v-for="(value, index) in mainClock" :key="index">
+        <span v-if="index > 0" aria-hidden="true">:</span>
+        <span class="rolling-digit" aria-hidden="true">
+          <Transition :name="rollingDown ? 'roll-down' : 'roll-up'">
+            <span :key="value">{{ value }}</span>
+          </Transition>
+        </span>
+      </template>
     </h1>
 
     <!-- サブ表示 -->
@@ -112,6 +133,49 @@ watch(wScreen, () => {
 <style scoped>
 .main-clock {
   font-size: v-bind(mainClockSize);
+}
+
+.rolling-clock {
+  display: inline-flex;
+  line-height: 1;
+}
+
+.rolling-digit {
+  position: relative;
+  display: inline-grid;
+  width: 2ch;
+  height: 1em;
+  overflow: hidden;
+  vertical-align: top;
+}
+
+.rolling-digit > span {
+  grid-area: 1 / 1;
+  display: inline-block;
+  width: 2ch;
+  text-align: center;
+  transition: transform 1s cubic-bezier(1, 0, 0, 1);
+}
+
+.roll-up-enter-from {
+  transform: translateY(100%);
+}
+
+.roll-up-leave-active,
+.roll-down-leave-active {
+  position: absolute;
+}
+
+.roll-up-leave-to {
+  transform: translateY(-100%);
+}
+
+.roll-down-enter-from {
+  transform: translateY(-100%);
+}
+
+.roll-down-leave-to {
+  transform: translateY(100%);
 }
 
 .sub-clock {
