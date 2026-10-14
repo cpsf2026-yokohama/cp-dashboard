@@ -39,5 +39,8 @@ Worker tests use Vitest with the Cloudflare test plugin. Add regression cases as
 ## Commit & Pull Request Guidelines
 History uses imperative English subjects (`Add …`, `Fix …`) and optional scope tags (`[clock] …`), often with Japanese descriptions. Keep commits focused. PRs should explain changes, link relevant issues, report validation, and include screenshots for UI changes.
 
+## Public-Facing Communication
+Write public-facing project communications in Japanese by default. This includes pull request titles and descriptions, issue text, release notes, and team announcements. Use another language only when the user or intended audience explicitly asks for it.
+
 ## Configuration & Security
 `NUXT_PUBLIC_VIDEO_API_BASE` overrides the API URL; `BASE_URL` sets the application prefix. Keep credentials out of Git and preserve Access authentication and role checks.
