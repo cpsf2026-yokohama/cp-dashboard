@@ -502,10 +502,7 @@ function openSchedule() {
     <div class="mx-auto max-w-7xl px-5 py-8 md:px-8">
       <header class="mb-8 flex flex-wrap items-center justify-between gap-4">
         <div>
-          <div class="mb-2 flex items-center gap-2 text-sm text-slate-500">
-            <span class="h-2 w-2 rounded-full bg-emerald-500" />
-            ローカルプロトタイプ
-          </div>
+
           <h1 class="text-3xl font-bold tracking-tight">Video Control</h1>
           <p class="mt-2 text-sm text-slate-500">
             イベント映像と再生スケジュールを管理
@@ -589,33 +586,7 @@ function openSchedule() {
           </article>
         </section>
 
-        <section class="mb-7 rounded-2xl border border-slate-200 bg-white p-6">
-          <div class="mb-5 flex items-center justify-between gap-3">
-            <div>
-              <h2 class="text-lg font-bold">端末ステータス</h2>
-              <p class="mt-1 text-sm text-slate-500">再生端末の表示イメージ</p>
-            </div>
-            <span class="rounded-full bg-amber-50 px-3 py-1 text-xs font-medium text-amber-700">
-              デモデータ
-            </span>
-          </div>
 
-          <div class="grid gap-4 md:grid-cols-2">
-            <div
-              v-for="device in ['A', 'B']"
-              :key="device"
-              class="rounded-xl border border-slate-200 p-4"
-            >
-              <div class="flex items-center justify-between">
-                <span class="font-semibold">再生端末 {{ device }}</span>
-                <span class="text-xs text-slate-500">状態未確認</span>
-              </div>
-              <p class="mt-3 text-sm text-slate-500">次の予定</p>
-              <p class="mt-1 font-medium">未接続・未連携</p>
-              <p class="mt-1 text-sm text-slate-500">実際の再生情報ではありません</p>
-            </div>
-          </div>
-        </section>
 
         <section class="rounded-2xl border border-slate-200 bg-white p-6">
           <div class="mb-4 flex items-center justify-between gap-3">
@@ -868,7 +839,7 @@ function openSchedule() {
       </template>
 
       <footer class="mt-8 text-center text-xs text-slate-400">
-        Video Control · ローカル開発版 · スケジュールはローカルDBに保存
+        Video Control · Cloudflareに保存 · 10G超えた状態で1ヶ月以上放置したらお金がかかります
       </footer>
     </div>
 
