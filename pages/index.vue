@@ -178,7 +178,7 @@ onMounted(async () => {
   void pollPlaybackSchedule();
   schedulePollTimer = window.setInterval(() => {
     void pollPlaybackSchedule();
-  }, 2_000);
+  }, 30_000);
 });
 
 onUnmounted(() => {
