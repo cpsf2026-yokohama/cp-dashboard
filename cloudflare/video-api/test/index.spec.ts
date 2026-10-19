@@ -372,7 +372,7 @@ describe("Video API worker", () => {
           bind: (..._values: unknown[]) => statement,
           first: async () => sql.includes("FROM users")
             ? { id: requesterId, email: "mentor@example.invalid", role: "mentor" }
-            : sql.includes("FROM change_requests") ? { requesterId, payloadJson: JSON.stringify({ kind: "horizontal" }) } : null,
+            : sql.includes("FROM change_requests") ? { requesterId: "legacy-requester-id", requesterEmail: "MENTOR@example.invalid", payloadJson: JSON.stringify({ kind: "horizontal" }) } : null,
           run: async () => { statements.push(sql); return { success: true, meta: { changes: 1 } }; },
         };
         return statement;
@@ -1011,11 +1011,12 @@ describe("Video API worker", () => {
   it("shows a before and after comparison for older pending setting requests", async () => {
     const mentor = { id: "local-test-mentor", email: "mentor@example.invalid", role: "mentor" };
     const pending = { id: "old-request", kind: "settings", summary: "共有設定を変更", payloadJson: JSON.stringify({ settings: { isBannerVisible: false } }), requesterId: "requester", requesterEmail: "requester@example.invalid", createdAt: "2030-01-01 00:00:00" };
+    const legacyNoDelta = { ...pending, id: "legacy-no-delta", payloadJson: JSON.stringify({ settings: { isBannerVisible: true } }) };
     const db = {
       prepare: (sql: string) => {
         const statement = {
           first: async () => sql.includes("FROM users") ? mentor : sql.includes("FROM shared_settings") ? { settingsJson: JSON.stringify({ isBannerVisible: true }), applyJson: "{}" } : null,
-          all: async () => ({ results: [pending] }),
+          all: async () => ({ results: [pending, legacyNoDelta] }),
           bind: () => statement,
         };
         return statement;
@@ -1027,6 +1028,9 @@ describe("Video API worker", () => {
       createExecutionContext(),
     );
     expect(response.status).toBe(200);
-    expect(await response.json()).toMatchObject({ requests: [{ summary: "横バナー: 有効 → 無効", payload: { changes: { isBannerVisible: { before: true, after: false } } } }] });
+    expect(await response.json()).toMatchObject({ requests: [
+      { summary: "横バナー: 有効 → 無効", payload: { changes: { isBannerVisible: { before: true, after: false } } } },
+      { summary: "横バナー: 変更前不明 → 有効", payload: { changes: { isBannerVisible: { beforeKnown: false, after: true } } } },
+    ] });
   });
 });

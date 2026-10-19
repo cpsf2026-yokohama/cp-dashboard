@@ -54,10 +54,19 @@ function details(item: ChangeRequest) {
   const payload = item.payload
   const rows: Array<[string, string]> = []
   const labels: Record<string, string> = { isBannerVisible: '横バナー', isVerticalBanner: '縦バナー', isChimeEnabled: 'チャイム', isPreChimeEnabled: '予鈴', countdownDates: 'カウントダウン予定', yearlyCountdownDates: '毎年の予定', userChimeTimes: 'チャイム時刻' }
-  const valueText = (value: unknown) => typeof value === 'boolean' ? (value ? '有効' : '無効') : Array.isArray(value) ? `${value.length}件` : value === undefined ? '未設定' : '変更あり'
+  const valueText = (value: unknown) => {
+    if (typeof value === 'boolean') return value ? '有効' : '無効'
+    if (Array.isArray(value)) {
+      const contents = value.map(entry => typeof entry === 'object' && entry !== null ? JSON.stringify(entry) : String(entry)).join('、')
+      return value.length ? `${value.length}件: ${contents.slice(0, 140)}${contents.length > 140 ? '…' : ''}` : '0件'
+    }
+    if (value === undefined) return '未設定'
+    if (typeof value === 'object' && value !== null) return JSON.stringify(value).slice(0, 140)
+    return String(value)
+  }
   if (payload.changes && typeof payload.changes === 'object') {
-    for (const [key, value] of Object.entries(payload.changes as Record<string, { before?: unknown; after?: unknown }>)) {
-      if (key in labels) rows.push([labels[key], `${valueText(value.before)} → ${valueText(value.after)}`])
+    for (const [key, value] of Object.entries(payload.changes as Record<string, { before?: unknown; after?: unknown; beforeKnown?: boolean }>)) {
+      if (key in labels) rows.push([labels[key], `${value.beforeKnown === false ? '変更前不明' : valueText(value.before)} → ${valueText(value.after)}`])
     }
   }
   if (payload.applyChanges && typeof payload.applyChanges === 'object') {

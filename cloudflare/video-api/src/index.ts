@@ -494,30 +494,39 @@ export default {
         let summary = String(row.summary);
       if (row.kind === "settings" && (!payload.changes || Object.keys(payload.changes as object).length === 0)) {
           const requested = (payload.settings ?? {}) as Record<string, unknown>;
-          const changes: Record<string, { before: unknown; after: unknown }> = {};
+          const baseline = (payload.beforeSettings && typeof payload.beforeSettings === "object"
+            ? payload.beforeSettings
+            : currentSettings) as Record<string, unknown>;
+          const changes: Record<string, { before: unknown; after: unknown; beforeKnown?: boolean }> = {};
           const applyChanges: Record<string, { before: boolean; after: boolean }> = {};
           for (const key of sharedSettingKeys) {
-            if (key in requested && JSON.stringify(currentSettings[key]) !== JSON.stringify(requested[key])) changes[key] = { before: currentSettings[key], after: requested[key] };
+            if (key in requested && JSON.stringify(baseline[key]) !== JSON.stringify(requested[key])) changes[key] = { before: baseline[key], after: requested[key] };
           }
           const requestedApply = (payload.apply as SharedSettingsApply | undefined) ?? currentApply;
           for (const key of sharedSettingKeys) if (requestedApply[key] !== currentApply[key]) applyChanges[key] = { before: currentApply[key], after: requestedApply[key] };
+          // Older pending requests have no historical baseline. Preserve the requested
+          // targets in the UI instead of claiming that no change was requested.
+          if (!payload.beforeSettings && Object.keys(changes).length === 0 && Object.keys(requested).length > 0) {
+            for (const key of sharedSettingKeys) if (key in requested) changes[key] = { before: undefined, after: requested[key], beforeKnown: false };
+          }
           payload.changes = changes;
           payload.applyChanges = applyChanges;
-          const descriptions = Object.entries(changes).map(([key, value]) => `${labels[key]}: ${valueText(value.before)} → ${valueText(value.after)}`);
+          const descriptions = Object.entries(changes).map(([key, value]) => `${labels[key]}: ${"beforeKnown" in value && value.beforeKnown === false ? "変更前不明" : valueText(value.before)} → ${valueText(value.after)}`);
           for (const [key, value] of Object.entries(applyChanges)) descriptions.push(`${labels[key]}のサイト反映: ${value.before ? "有効" : "無効"} → ${value.after ? "有効" : "無効"}`);
           if (descriptions.length) summary = descriptions.join("・");
+          else if (Object.keys(requested).length) summary = "共有設定の申請（変更前の履歴なし）";
         }
-        return { ...row, isMine: row.requesterId === accessUser!.id, summary, payloadJson: undefined, payload };
+        return { ...row, isMine: row.requesterId === accessUser!.id || String(row.requesterEmail).toLowerCase() === accessUser!.email.toLowerCase(), summary, payloadJson: undefined, payload };
       }) });
     } else if (request.method === "DELETE" && /^\/api\/change-requests\/[^/]+$/.test(url.pathname)) {
       const id = decodeURIComponent(url.pathname.slice("/api/change-requests/".length));
-      const row = await env.DB.prepare("SELECT requester_id AS requesterId, payload_json AS payloadJson FROM change_requests WHERE id = ? AND status = 'pending'")
-        .bind(id).first<{ requesterId: string; payloadJson: string }>();
-      if (!row || row.requesterId !== accessUser!.id) {
+      const row = await env.DB.prepare("SELECT cr.requester_id AS requesterId, u.email AS requesterEmail, cr.payload_json AS payloadJson FROM change_requests cr JOIN users u ON u.id = cr.requester_id WHERE cr.id = ? AND cr.status = 'pending'")
+        .bind(id).first<{ requesterId: string; requesterEmail: string; payloadJson: string }>();
+      if (!row || (row.requesterId !== accessUser!.id && row.requesterEmail.toLowerCase() !== accessUser!.email.toLowerCase())) {
         response = jsonError("Pending request not found", 404);
       } else {
         const deleted = await env.DB.prepare("DELETE FROM change_requests WHERE id = ? AND requester_id = ? AND status = 'pending'")
-          .bind(id, accessUser!.id).run();
+          .bind(id, row.requesterId).run();
         if (deleted.meta.changes === 0) response = jsonError("Request is already being reviewed", 409);
         else {
           const payload = JSON.parse(row.payloadJson) as Record<string, unknown>;
@@ -591,7 +600,7 @@ export default {
           const descriptions = Object.entries(changes).map(([key, change]) => `${labels[key] ?? key}: ${describeValue(key, change.before)} → ${describeValue(key, change.after)}`);
           for (const [key, change] of Object.entries(applyChanges)) descriptions.push(`${labels[key]}のサイト反映: ${change.before ? "有効" : "無効"} → ${change.after ? "有効" : "無効"}`);
           summary = descriptions.length ? descriptions.join("・") : "共有設定を変更";
-          payload = { settings, apply: body.apply, changes, applyChanges, adminEdit: body.adminEdit === true };
+          payload = { settings, apply: body.apply, beforeSettings, beforeApply, changes, applyChanges, adminEdit: body.adminEdit === true };
         } else if (bannerKind && request.method === "DELETE") {
           kind = "banner.delete"; summary = `${bannerKind === "horizontal" ? "横" : "縦"}型バナーを削除`; payload = { kind: bannerKind };
         } else if (bannerKind && request.method === "PUT") {
