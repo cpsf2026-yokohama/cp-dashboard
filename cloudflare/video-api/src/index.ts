@@ -10,6 +10,8 @@ interface Env {
 
   LOCAL_AUTH_BYPASS?: string;
 
+  LOCAL_AUTH_BYPASS_ROLE?: string;
+
 }
 
 const allowedOrigin = "http://localhost:3000";
@@ -57,7 +59,7 @@ function parseSharedSettingsApply(value: unknown): SharedSettingsApply | null {
   ) as SharedSettingsApply;
 }
 
-type UserRole = "admin" | "producer" | "operator";
+type UserRole = "admin" | "producer" | "operator" | "mentor";
 
 interface ApiUser {
   id: string;
@@ -88,6 +90,8 @@ let accessKeysCache: {
 
 export function requiresAccessAuthentication(method: string, pathname: string): boolean {
   return (
+    (method === "GET" && pathname === "/api/change-requests") ||
+    (method === "POST" && /^\/api\/change-requests\/[^/]+\/(approve|reject)$/.test(pathname)) ||
     (method === "PUT" && pathname === "/api/settings") ||
     ((method === "PUT" || method === "DELETE") && /^\/api\/banners\/(horizontal|vertical)$/.test(pathname)) ||
     (method === "GET" &&
@@ -100,6 +104,8 @@ export function requiresAccessAuthentication(method: string, pathname: string): 
 }
 
 export function hasRoleForRoute(user: Pick<ApiUser, "role">, method: string, pathname: string): boolean {
+  if (method === "GET" && pathname === "/api/change-requests") return user.role === "mentor";
+  if (method === "POST" && /^\/api\/change-requests\/[^/]+\/(approve|reject)$/.test(pathname)) return user.role === "mentor";
   if (
     (method === "PUT" && pathname === "/api/settings") ||
     ((method === "PUT" || method === "DELETE") && /^\/api\/banners\/(horizontal|vertical)$/.test(pathname)) ||
@@ -107,22 +113,22 @@ export function hasRoleForRoute(user: Pick<ApiUser, "role">, method: string, pat
     (method === "POST" && pathname === "/api/users") ||
     (method === "PATCH" && /^\/api\/users\/[^/]+$/.test(pathname))
   ) {
-    return user.role === "admin";
+    return user.role === "admin" || user.role === "mentor";
   }
 
   if (method === "POST" && pathname === "/api/videos") {
-    return user.role === "admin" || user.role === "producer";
+    return user.role === "admin" || user.role === "mentor" || user.role === "producer";
   }
 
   if (
     (method === "POST" && pathname === "/api/schedules") ||
     (method === "DELETE" && pathname.startsWith("/api/schedules/"))
   ) {
-    return user.role === "admin" || user.role === "operator";
+    return user.role === "admin" || user.role === "mentor" || user.role === "operator";
   }
 
   if (method === "DELETE" && /^\/api\/videos\/[^/]+$/.test(pathname)) {
-    return user.role === "admin" || user.role === "producer";
+    return user.role === "admin" || user.role === "mentor" || user.role === "producer";
   }
 
   return true;
@@ -177,10 +183,11 @@ async function getAccessUser(request: Request, env: Env): Promise<{
     !env.ACCESS_TEAM_DOMAIN &&
     !env.ACCESS_AUD
   ) {
+    const localRole = env.LOCAL_AUTH_BYPASS_ROLE === "mentor" ? "mentor" : "admin";
     const localAdmin = await env.DB.prepare(`
       SELECT id, email, role
       FROM users
-      WHERE id = ? AND role = 'admin'
+      WHERE id = ? AND role = '${localRole}'
     `)
       .bind(localAdminId)
       .first<{ id: string; email: string; role: string }>();
@@ -190,7 +197,7 @@ async function getAccessUser(request: Request, env: Env): Promise<{
     }
 
     return {
-      user: { id: localAdmin.id, email: localAdmin.email, role: "admin" },
+      user: { id: localAdmin.id, email: localAdmin.email, role: localRole },
       response: null,
     };
   }
@@ -285,7 +292,7 @@ async function getAccessUser(request: Request, env: Env): Promise<{
       .bind(claims.email.trim())
       .first<{ id: string; email: string; role: string }>();
 
-    if (!user || !["admin", "producer", "operator"].includes(user.role)) {
+    if (!user || !["admin", "producer", "operator", "mentor"].includes(user.role)) {
       return { user: null, response: jsonError("User is not authorized", 403) };
     }
 
@@ -330,7 +337,79 @@ function jsonError(message: string, status: number): Response {
 }
 
 function isUserRole(value: unknown): value is UserRole {
-  return value === "admin" || value === "producer" || value === "operator";
+  return value === "admin" || value === "producer" || value === "operator" || value === "mentor";
+}
+
+function isDashboardMutation(method: string, pathname: string): boolean {
+  return (method === "PUT" && pathname === "/api/settings") ||
+    ((method === "PUT" || method === "DELETE") && /^\/api\/banners\/(horizontal|vertical)$/.test(pathname)) ||
+    (method === "POST" && ["/api/schedules", "/api/videos"].includes(pathname)) ||
+    (method === "DELETE" && (/^\/api\/schedules\/[^/]+$/.test(pathname) || /^\/api\/videos\/[^/]+$/.test(pathname)));
+}
+
+async function createChangeRequest(env: Env, requester: string, kind: string, payload: Record<string, unknown>, summary: string): Promise<string> {
+  const id = crypto.randomUUID();
+  await env.DB.prepare(`INSERT INTO change_requests (id, requester_id, kind, summary, payload_json) VALUES (?, ?, ?, ?, ?)`)
+    .bind(id, requester, kind, summary, JSON.stringify(payload)).run();
+  return id;
+}
+
+async function applyChangeRequest(env: Env, reviewer: string, row: { id: string; requesterId: string; kind: string; payloadJson: string }): Promise<void> {
+  const payload = JSON.parse(row.payloadJson) as Record<string, unknown>;
+  switch (row.kind) {
+    case "settings": {
+      const current = await env.DB.prepare("SELECT settings_json AS settingsJson, apply_json AS applyJson FROM shared_settings WHERE id = 1")
+        .first<{ settingsJson: string; applyJson: string }>();
+      if (!current) throw new Error("Shared settings not found");
+      const settings = JSON.parse(current.settingsJson) as Record<string, unknown>;
+      const incoming = payload.settings as Record<string, unknown>;
+      const apply = payload.apply as SharedSettingsApply | undefined;
+      let currentApply = defaultSharedSettingsApply;
+      try { currentApply = parseSharedSettingsApply(JSON.parse(current.applyJson)) ?? defaultSharedSettingsApply; } catch { /* use defaults */ }
+      const effectiveApply = apply ?? currentApply;
+      for (const key of sharedSettingKeys) if ((payload.adminEdit === true || effectiveApply[key]) && key in incoming) settings[key] = incoming[key];
+      await env.DB.prepare("UPDATE shared_settings SET settings_json = ?, apply_json = ?, updated_at = datetime('now') WHERE id = 1")
+        .bind(JSON.stringify(settings), JSON.stringify(apply ?? parseSharedSettingsApply(JSON.parse(current.applyJson)) ?? defaultSharedSettingsApply)).run();
+      break;
+    }
+    case "schedule.create": {
+      const videoId = String(payload.videoId); const startsAt = String(payload.startsAt);
+      const video = await env.DB.prepare("SELECT id FROM videos WHERE id = ?").bind(videoId).first();
+      if (!video) throw new Error("Video no longer exists");
+      await env.DB.prepare("INSERT INTO schedules (id, video_id, starts_at, created_by) VALUES (?, ?, ?, ?)")
+        .bind(String(payload.id), videoId, startsAt, row.requesterId).run();
+      break;
+    }
+    case "schedule.delete": {
+      await env.DB.prepare("DELETE FROM schedules WHERE id = ?").bind(String(payload.id)).run(); break;
+    }
+    case "video.upload": {
+      const id = String(payload.id), stagingKey = String(payload.stagingKey), r2Key = `videos/${id}`;
+      const staged = await env.VIDEO_BUCKET.get(stagingKey);
+      if (!staged) throw new Error("Staged video file is missing");
+      await env.VIDEO_BUCKET.put(r2Key, staged.body, { httpMetadata: { contentType: String(payload.contentType) } });
+      await env.DB.prepare("INSERT INTO videos (id, title, r2_key, content_type, size_bytes, uploaded_by) VALUES (?, ?, ?, ?, ?, ?)")
+        .bind(id, String(payload.title), r2Key, String(payload.contentType), Number(payload.sizeBytes), row.requesterId).run();
+      await env.VIDEO_BUCKET.delete(stagingKey); break;
+    }
+    case "video.delete": {
+      const id = String(payload.id);
+      const active = await env.DB.prepare("SELECT id FROM schedules WHERE video_id = ? LIMIT 1").bind(id).first();
+      if (active) throw new Error("Remove this video's schedules before deleting it");
+      const video = await env.DB.prepare("SELECT r2_key AS r2Key FROM videos WHERE id = ?").bind(id).first<{ r2Key: string }>();
+      if (!video) throw new Error("Video no longer exists");
+      await env.DB.prepare("DELETE FROM videos WHERE id = ?").bind(id).run(); await env.VIDEO_BUCKET.delete(video.r2Key); break;
+    }
+    case "banner.upload": {
+      const staged = await env.VIDEO_BUCKET.get(String(payload.stagingKey));
+      if (!staged) throw new Error("Staged banner file is missing");
+      await env.VIDEO_BUCKET.put(`banners/${String(payload.kind)}`, staged.body, { httpMetadata: { contentType: String(payload.contentType) } });
+      await env.VIDEO_BUCKET.delete(String(payload.stagingKey)); break;
+    }
+    case "banner.delete": await env.VIDEO_BUCKET.delete(`banners/${String(payload.kind)}`); break;
+    default: throw new Error("Unsupported change request");
+  }
+  await recordAuditLog(env, reviewer, "change.approved", "change_request", row.id, { kind: row.kind });
 }
 
 async function recordAuditLog(
@@ -399,6 +478,91 @@ export default {
     } else if (authResponse) {
 
       response = authResponse;
+
+    } else if (request.method === "GET" && url.pathname === "/api/change-requests") {
+      const result = await env.DB.prepare(`SELECT cr.id, cr.kind, cr.summary, cr.payload_json AS payloadJson, cr.requester_id AS requesterId, u.email AS requesterEmail, cr.created_at AS createdAt FROM change_requests cr JOIN users u ON u.id = cr.requester_id WHERE cr.status = 'pending' ORDER BY cr.created_at ASC`).all();
+      response = Response.json({ requests: result.results.map((row) => ({ ...row, payloadJson: undefined, payload: JSON.parse(String(row.payloadJson)) })) });
+    } else if (request.method === "POST" && /^\/api\/change-requests\/[^/]+\/(approve|reject)$/.test(url.pathname)) {
+      const [, idPart, decision] = /^\/api\/change-requests\/([^/]+)\/(approve|reject)$/.exec(url.pathname)!;
+      const id = decodeURIComponent(idPart);
+      const row = await env.DB.prepare("SELECT id, requester_id AS requesterId, kind, payload_json AS payloadJson, status FROM change_requests WHERE id = ?").bind(id)
+        .first<{ id: string; requesterId: string; kind: string; payloadJson: string; status: string }>();
+      if (!row || row.status !== "pending") response = jsonError("Request not found or already reviewed", 404);
+      else if (row.requesterId === accessUser!.id) response = jsonError("Mentors cannot review their own requests", 409);
+      else {
+        try {
+          const claim = await env.DB.prepare("UPDATE change_requests SET status = 'processing' WHERE id = ? AND status = 'pending'").bind(id).run();
+          if (claim.meta.changes === 0) throw new Error("Request is already being reviewed");
+          try {
+            if (decision === "approve") await applyChangeRequest(env, accessUser!.id, row);
+            else {
+              const payload = JSON.parse(row.payloadJson) as Record<string, unknown>;
+              if (typeof payload.stagingKey === "string") await env.VIDEO_BUCKET.delete(payload.stagingKey);
+            }
+          } catch (error) {
+            await env.DB.prepare("UPDATE change_requests SET status = 'pending' WHERE id = ? AND status = 'processing'").bind(id).run().catch(() => undefined);
+            throw error;
+          }
+          await env.DB.prepare("UPDATE change_requests SET status = ?, reviewed_by = ?, reviewed_at = datetime('now') WHERE id = ? AND status = 'processing'")
+            .bind(decision === "approve" ? "approved" : "rejected", accessUser!.id, id).run();
+          response = Response.json({ success: true, status: decision === "approve" ? "approved" : "rejected" });
+        } catch (error) {
+          console.error("Failed to review change request:", error);
+          response = jsonError(error instanceof Error ? error.message : "Failed to apply request", 409);
+        }
+      }
+    } else if (isDashboardMutation(request.method, url.pathname)) {
+      let stagingKeyToCleanup: string | null = null;
+      try {
+        let kind = "", summary = "", payload: Record<string, unknown> = {};
+        const bannerKind = bannerKindFromPath(url.pathname);
+        if (request.method === "PUT" && url.pathname === "/api/settings") {
+          const body = await request.json() as Record<string, unknown>;
+          if (!body || (!body.settings && !body.apply)) throw new Error("settings or apply is required");
+          if (body.settings !== undefined && (typeof body.settings !== "object" || body.settings === null || Array.isArray(body.settings))) throw new Error("settings must be an object");
+          if (body.apply !== undefined && !parseSharedSettingsApply(body.apply)) throw new Error("Invalid apply settings");
+          kind = "settings"; summary = "共有設定を変更"; payload = { settings: body.settings ?? {}, apply: body.apply, adminEdit: body.adminEdit === true };
+        } else if (bannerKind && request.method === "DELETE") {
+          kind = "banner.delete"; summary = `${bannerKind === "horizontal" ? "横" : "縦"}型バナーを削除`; payload = { kind: bannerKind };
+        } else if (bannerKind && request.method === "PUT") {
+          const contentType = request.headers.get("Content-Type")?.split(";")[0].trim().toLowerCase() ?? "";
+          const bytes = await request.arrayBuffer();
+          if (!/^image\/(png|jpeg|webp|gif|avif)$/.test(contentType) || bytes.byteLength < 1 || bytes.byteLength > maxBannerBytes) throw new Error("PNG/JPEG/WebP/GIF/AVIF画像（10 MiB以下）を指定してください");
+          const stagingKey = `pending/${crypto.randomUUID()}`;
+          stagingKeyToCleanup = stagingKey;
+          await env.VIDEO_BUCKET.put(stagingKey, bytes, { httpMetadata: { contentType } });
+          kind = "banner.upload"; summary = `${bannerKind === "horizontal" ? "横" : "縦"}型バナーを更新`; payload = { kind: bannerKind, stagingKey, contentType };
+        } else if (request.method === "POST" && url.pathname === "/api/schedules") {
+          const body = await request.json() as Record<string, unknown>;
+          const startsAt = new Date(String(body.startsAt));
+          if (typeof body.videoId !== "string" || Number.isNaN(startsAt.getTime())) throw new Error("videoId and valid startsAt are required");
+          const video = await env.DB.prepare("SELECT id FROM videos WHERE id = ?").bind(body.videoId).first();
+          if (!video) throw new Error("Video not found");
+          kind = "schedule.create"; summary = "再生スケジュールを追加"; payload = { videoId: body.videoId, startsAt: startsAt.toISOString(), id: crypto.randomUUID() };
+        } else if (request.method === "DELETE" && /^\/api\/schedules\/[^/]+$/.test(url.pathname)) {
+          kind = "schedule.delete"; summary = "再生スケジュールを削除"; payload = { id: decodeURIComponent(url.pathname.slice("/api/schedules/".length)) };
+        } else if (request.method === "DELETE" && /^\/api\/videos\/[^/]+$/.test(url.pathname)) {
+          const id = decodeURIComponent(url.pathname.slice("/api/videos/".length));
+          const video = await env.DB.prepare("SELECT r2_key AS r2Key, uploaded_by AS uploadedBy FROM videos WHERE id = ?").bind(id).first<{ r2Key: string; uploadedBy: string }>();
+          if (!video) throw new Error("Video not found");
+          if (accessUser!.role !== "admin" && accessUser!.role !== "mentor" && video.uploadedBy !== accessUser!.id) throw new Error("You can only delete videos you uploaded");
+          const scheduled = await env.DB.prepare("SELECT id FROM schedules WHERE video_id = ? LIMIT 1").bind(id).first();
+          if (scheduled) throw new Error("Remove this video's schedules before deleting it");
+          kind = "video.delete"; summary = "動画を削除"; payload = { id };
+        } else if (request.method === "POST" && url.pathname === "/api/videos") {
+          const form = await request.formData(); const file = form.get("file"); const title = form.get("title");
+          if (!(file instanceof File) || typeof title !== "string" || !title.trim() || file.size < 1 || file.size > 100 * 1024 * 1024 || !file.type.startsWith("video/")) throw new Error("動画名と100 MiB以下の動画ファイルが必要です");
+          const id = crypto.randomUUID(), stagingKey = `pending/${id}`;
+          stagingKeyToCleanup = stagingKey;
+          await env.VIDEO_BUCKET.put(stagingKey, file.stream(), { httpMetadata: { contentType: file.type } });
+          kind = "video.upload"; summary = `動画を追加: ${title.trim()}`; payload = { id, stagingKey, title: title.trim(), contentType: file.type, sizeBytes: file.size };
+        }
+        const id = await createChangeRequest(env, accessUser!.id, kind, payload, summary);
+        response = Response.json({ success: true, requestId: id, status: "pending", message: "メンターの承認待ちです" }, { status: 202 });
+      } catch (error) {
+        if (stagingKeyToCleanup) await env.VIDEO_BUCKET.delete(stagingKeyToCleanup).catch(() => undefined);
+        response = jsonError(error instanceof Error ? error.message : "Invalid change request", 400);
+      }
 
 
     } else if (request.method === "GET" && url.pathname === "/api/banners") {
@@ -666,8 +830,8 @@ export default {
 
           if (!user) {
             response = jsonError("User not found", 404);
-          } else if (user.id === accessUser!.id && body.role !== "admin") {
-            response = jsonError("You cannot remove your own admin role", 409);
+          } else if (user.id === accessUser!.id && body.role !== "admin" && body.role !== "mentor") {
+            response = jsonError("You cannot remove your own administrator privileges", 409);
           } else if (user.role === body.role) {
             response = Response.json({ user });
           } else {
@@ -1073,7 +1237,7 @@ export default {
 
             response = jsonError("Video not found", 404);
 
-          } else if (accessUser!.role !== "admin" && video.uploadedBy !== accessUser!.id) {
+          } else if (accessUser!.role !== "admin" && accessUser!.role !== "mentor" && video.uploadedBy !== accessUser!.id) {
 
             response = jsonError("You can only delete videos you uploaded", 403);
 
@@ -1290,10 +1454,11 @@ export default {
         response = Response.json({
           videos: result.results.map(({ uploadedBy, isUnused, ...video }) => ({
             ...video,
-            canDelete: accessUser!.role === "admin" || uploadedBy === accessUser!.id,
+            canDelete: accessUser!.role === "admin" || accessUser!.role === "mentor" || uploadedBy === accessUser!.id,
             isUnused: Boolean(isUnused),
           })),
-          canManageUsers: accessUser!.role === "admin",
+          canManageUsers: accessUser!.role === "admin" || accessUser!.role === "mentor",
+          canReviewRequests: accessUser!.role === "mentor",
         });
 
       } catch (error) {

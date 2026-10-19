@@ -267,6 +267,10 @@ describe("Video API worker", () => {
   });
 
   it("applies separate roles to uploads and schedule changes", () => {
+    expect(hasRoleForRoute({ role: "mentor" }, "GET", "/api/change-requests")).toBe(true);
+    expect(hasRoleForRoute({ role: "mentor" }, "POST", "/api/change-requests/request-1/approve")).toBe(true);
+    expect(hasRoleForRoute({ role: "admin" }, "GET", "/api/change-requests")).toBe(false);
+    expect(hasRoleForRoute({ role: "mentor" }, "PUT", "/api/settings")).toBe(true);
     expect(hasRoleForRoute({ role: "producer" }, "POST", "/api/videos")).toBe(true);
     expect(hasRoleForRoute({ role: "producer" }, "POST", "/api/schedules")).toBe(false);
     expect(hasRoleForRoute({ role: "operator" }, "POST", "/api/schedules")).toBe(true);
@@ -283,8 +287,48 @@ describe("Video API worker", () => {
     expect(requiresAccessAuthentication("PATCH", "/api/users/user-1")).toBe(true);
   });
 
-  it("records the actor and target when a schedule is created", async () => {
+  it("applies a settings change only after a different mentor approves it", async () => {
+    const executed: Array<{ sql: string; values: unknown[] }> = [];
+    const requestRow = {
+      id: "request-1", requesterId: "requester-1", kind: "settings",
+      payloadJson: JSON.stringify({ settings: { isChimeEnabled: true } }), status: "pending",
+    };
+    const fullApply = {
+      countdownDates: true, yearlyCountdownDates: true, userChimeTimes: true,
+      isChimeEnabled: true, isPreChimeEnabled: true, isBannerVisible: true, isVerticalBanner: true,
+    };
+    const db = {
+      prepare: (sql: string) => {
+        let values: unknown[] = [];
+        const statement = {
+          bind: (...bound: unknown[]) => { values = bound; return statement; },
+          first: async () => {
+            if (sql.includes("FROM users")) return { id: "local-test-admin", email: "mentor@example.invalid", role: "mentor" };
+            if (sql.includes("FROM change_requests")) return requestRow;
+            if (sql.includes("SELECT settings_json")) return { settingsJson: JSON.stringify({ isChimeEnabled: false }), applyJson: JSON.stringify(fullApply) };
+            return null;
+          },
+          run: async () => { executed.push({ sql, values }); return { success: true, meta: { changes: 1 } }; },
+        };
+        return statement;
+      },
+    } as unknown as D1Database;
+    const response = await worker.fetch(
+      new IncomingRequest("http://127.0.0.1:8787/api/change-requests/request-1/approve", { method: "POST" }),
+      { ...env, DB: db, LOCAL_AUTH_BYPASS: "true", LOCAL_AUTH_BYPASS_ROLE: "mentor", ACCESS_TEAM_DOMAIN: "", ACCESS_AUD: "" },
+      createExecutionContext(),
+    );
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ success: true, status: "approved" });
+    const settingsUpdate = executed.find(({ sql }) => sql.includes("UPDATE shared_settings"));
+    expect(settingsUpdate).toBeDefined();
+    expect(JSON.parse(String(settingsUpdate?.values[0]))).toMatchObject({ isChimeEnabled: true });
+    expect(executed.some(({ sql }) => sql.includes("SET status = 'processing'"))).toBe(true);
+  });
+
+  it("queues a schedule change without applying it before mentor approval", async () => {
     const auditRows: Array<{ sql: string; values: unknown[] }> = [];
+    const changeRows: Array<{ sql: string; values: unknown[] }> = [];
 
     const admin = {
       id: "local-test-admin",
@@ -305,6 +349,7 @@ describe("Video API worker", () => {
             if (sql.includes("INSERT INTO audit_logs")) {
               auditRows.push({ sql, values });
             }
+            if (sql.includes("INSERT INTO change_requests")) changeRows.push({ sql, values });
             return { success: true, meta: { changes: 1 } };
           },
         }),
@@ -335,12 +380,13 @@ describe("Video API worker", () => {
       createExecutionContext(),
     );
 
-    expect(response.status).toBe(201);
-    expect(auditRows).toHaveLength(1);
-    expect(auditRows[0].values[1]).toBe(admin.id);
-    expect(auditRows[0].values[2]).toBe("schedule.created");
-    expect(auditRows[0].values[3]).toBe("schedule");
-    expect(JSON.parse(String(auditRows[0].values[5]))).toEqual({
+    expect(response.status).toBe(202);
+    expect(await response.json()).toMatchObject({ status: "pending", message: "メンターの承認待ちです" });
+    expect(auditRows).toHaveLength(0);
+    expect(changeRows).toHaveLength(1);
+    expect(changeRows[0].values[1]).toBe(admin.id);
+    expect(changeRows[0].values[2]).toBe("schedule.create");
+    expect(JSON.parse(String(changeRows[0].values[4]))).toMatchObject({
       videoId: "video-1",
       startsAt: "2030-01-01T00:00:00.000Z",
     });
@@ -399,14 +445,10 @@ describe("Video API worker", () => {
       createExecutionContext(),
     );
 
-    expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({
-      success: true,
-      deletedId: "video-1",
-      storageCleanupPending: false,
-    });
-    expect(deletedObjects).toEqual(["videos/video-1"]);
-    expect(auditActions).toEqual(["video.deleted"]);
+    expect(response.status).toBe(202);
+    expect(await response.json()).toMatchObject({ status: "pending" });
+    expect(deletedObjects).toEqual([]);
+    expect(auditActions).toEqual([]);
   });
 
   it("returns unused status and delete permission without exposing uploader IDs", async () => {
@@ -606,6 +648,7 @@ describe("Video API worker", () => {
         const statement = {
           bind: (..._values: unknown[]) => statement,
           first: async () => ({ id: "local-test-admin", email: "local-test-admin@example.invalid", role: "admin" }),
+          run: async () => ({ success: true, meta: { changes: 1 } }),
         };
         return statement;
       },
@@ -627,7 +670,7 @@ describe("Video API worker", () => {
       localEnv,
       createExecutionContext(),
     );
-    expect(upload.status).toBe(200);
+    expect(upload.status).toBe(202);
 
     const list = await worker.fetch(
       new IncomingRequest("http://127.0.0.1:8787/api/banners"),
@@ -635,22 +678,21 @@ describe("Video API worker", () => {
       createExecutionContext(),
     );
     expect(list.status).toBe(200);
-    expect((await list.json() as { banners: Record<string, { size: number } | null> }).banners[kind]?.size).toBe(bytes.byteLength);
+    expect((await list.json() as { banners: Record<string, { size: number } | null> }).banners[kind]).toBeNull();
 
     const image = await worker.fetch(
       new IncomingRequest(`http://127.0.0.1:8787/api/banners/${kind}`),
       localEnv,
       createExecutionContext(),
     );
-    expect(image.status).toBe(200);
-    expect(new Uint8Array(await image.arrayBuffer())).toEqual(bytes);
+    expect(image.status).toBe(404);
 
     const remove = await worker.fetch(
       new IncomingRequest(`http://127.0.0.1:8787/api/banners/${kind}`, { method: "DELETE" }),
       localEnv,
       createExecutionContext(),
     );
-    expect(remove.status).toBe(200);
+    expect(remove.status).toBe(202);
   });
 
 
@@ -704,9 +746,9 @@ describe("Video API worker", () => {
       createExecutionContext(),
     );
 
-    expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ success: true });
-    expect(JSON.parse(savedJson)).toEqual({ isChimeEnabled: true });
+    expect(response.status).toBe(202);
+    expect(await response.json()).toMatchObject({ status: "pending" });
+    expect(savedJson).toBe("");
   });
 
   it("does not overwrite settings disabled by the admin apply policy", async () => {
@@ -768,7 +810,7 @@ describe("Video API worker", () => {
       createExecutionContext(),
     );
 
-    expect(response.status).toBe(200);
+    expect(response.status).toBe(202);
     expect(JSON.parse(storedSettings)).toEqual({ isChimeEnabled: false });
     expect(JSON.parse(storedApply)).toEqual(disabledPolicy);
   });
@@ -811,8 +853,8 @@ describe("Video API worker", () => {
       { ...env, DB: settingsDb, LOCAL_AUTH_BYPASS: "true", ACCESS_TEAM_DOMAIN: "", ACCESS_AUD: "" },
       createExecutionContext(),
     );
-    expect(response.status).toBe(200);
-    expect(JSON.parse(storedSettings)).toEqual({ countdownDates: [{ date: "2026-12-25", label: "冬休み" }] });
+    expect(response.status).toBe(202);
+    expect(JSON.parse(storedSettings)).toEqual({ countdownDates: [] });
   });
 
   it("rejects shared settings updates without settings", async () => {

@@ -27,7 +27,7 @@ type Video = {
 type ManagedUser = {
   id: string
   email: string
-  role: 'admin' | 'producer' | 'operator'
+  role: 'admin' | 'producer' | 'operator' | 'mentor'
   createdAt?: string
 }
 
@@ -49,6 +49,7 @@ const API_BASE = useVideoApiBase()
 
 const activeTab = ref<'overview' | 'videos' | 'schedule' | 'users' | 'settings'>('overview')
 const canManageUsers = ref(false)
+const canReviewRequests = ref(false)
 const managedUsers = ref<ManagedUser[]>([])
 const usersLoading = ref(false)
 const usersError = ref('')
@@ -215,9 +216,10 @@ async function loadVideos() {
       throw new Error(`HTTP ${response.status}`)
     }
 
-    const data: { videos: Video[], canManageUsers?: boolean } = await response.json()
+    const data: { videos: Video[], canManageUsers?: boolean, canReviewRequests?: boolean } = await response.json()
     videos.value = data.videos
     canManageUsers.value = data.canManageUsers === true
+    canReviewRequests.value = data.canReviewRequests === true
 
     if (
       !selectedVideo.value
@@ -258,7 +260,7 @@ async function uploadBanner(kind: SharedBannerKind, event: Event) {
   try {
     await uploadSharedBanner(kind, file)
     bannerInfo.value = await loadSharedBanners()
-    showNotice(`${kind === 'horizontal' ? '横型' : '縦型'}バナーを保存しました。サイトへ自動反映されます。`)
+    showNotice('バナーの変更を申請しました。メンターの承認後にサイトへ反映されます。')
   } catch (error) {
     showNotice(`バナーを保存できませんでした：${error instanceof Error ? error.message : '不明なエラー'}`, true)
   } finally {
@@ -275,7 +277,7 @@ async function removeBanner(kind: SharedBannerKind) {
   try {
     await deleteSharedBanner(kind)
     bannerInfo.value = await loadSharedBanners()
-    showNotice(`${label}バナーを削除しました。サイトへ自動反映されます。`)
+    showNotice('バナー削除を申請しました。メンターの承認後に反映されます。')
   } catch (error) {
     showNotice(`バナーを削除できませんでした：${error instanceof Error ? error.message : '不明なエラー'}`, true)
   } finally {
@@ -293,7 +295,7 @@ async function saveSettingsValues() {
       body: JSON.stringify({ settings: sharedSettings.value, adminEdit: true }),
     })
     if (!response.ok) throw await apiResponseError(response)
-    showNotice('共有設定の値を保存しました。端末には次回の自動取得時に反映されます。')
+    showNotice('共有設定の変更を申請しました。メンターの承認後に端末へ反映されます。')
   } catch (error) {
     console.error('Failed to save shared settings values:', error)
     showNotice(`設定値を保存できませんでした：${error instanceof Error ? error.message : '不明なエラー'}`, true)
@@ -320,7 +322,7 @@ async function saveSettingsPolicy() {
   settingsPolicySaving.value = true
   try {
     await saveSharedSettingsPolicy(settingsPolicy.value)
-    showNotice('共有設定の反映対象を保存しました。端末には次回の自動取得時に反映されます。')
+    showNotice('反映対象の変更を申請しました。メンターの承認後に端末へ反映されます。')
   } catch (error) {
     console.error('Failed to save shared settings policy:', error)
     showNotice(`反映対象を保存できませんでした：${error instanceof Error ? error.message : '不明なエラー'}`, true)
@@ -475,7 +477,7 @@ async function uploadVideo() {
     uploadFile.value = null
     if (uploadFileInput.value) uploadFileInput.value.value = ''
     await loadVideos()
-    showNotice('動画をアップロードして登録しました。')
+    showNotice('動画の登録を申請しました。メンターの承認後にライブラリへ反映されます。')
   } catch (error) {
     console.error('Failed to upload video:', error)
     showNotice(
@@ -511,9 +513,7 @@ async function deleteVideo(video: Video) {
     }
 
     await loadVideos()
-    showNotice(result.storageCleanupPending
-      ? '動画情報を削除しましたが、保存ファイルの削除に失敗しました。管理者に確認してください。'
-      : '動画を削除しました。')
+    showNotice('動画の削除を申請しました。メンターの承認後に反映されます。')
   } catch (error) {
     console.error('Failed to delete video:', error)
     showNotice(
@@ -597,7 +597,7 @@ async function addSchedule() {
     }
 
     showAddSchedule.value = false
-    showNotice('スケジュールを保存しました。')
+    showNotice('スケジュールの追加を申請しました。承認後に再生予定へ反映されます。')
   } catch (error) {
     console.error('Failed to add schedule:', error)
 
@@ -658,7 +658,7 @@ async function cancelSchedule(id: string) {
       return
     }
 
-    showNotice('予約を削除しました。')
+    showNotice('予約の削除を申請しました。メンターの承認後に反映されます。')
   } catch (error) {
     console.error('Failed to delete schedule:', error)
 
@@ -687,6 +687,7 @@ function openSchedule() {
       </header>
 
       <nav class="admin-tabs" aria-label="管理メニュー">
+        <a v-if="canReviewRequests" class="button" href="/mentor">承認リクエスト</a>
         <template
           v-for="tab in [
             { id: 'overview', label: '概要' },
@@ -926,7 +927,7 @@ function openSchedule() {
             <label class="field"><span>メールアドレス</span><input v-model="newUserEmail" type="email" required maxlength="254" placeholder="メンバーのメールアドレス"></label>
             <label class="field">
               <span>役割</span>
-              <select v-model="newUserRole"><option value="producer">動画制作担当</option><option value="operator">運用担当</option><option value="admin">管理者</option></select>
+              <select v-model="newUserRole"><option value="producer">動画制作担当</option><option value="operator">運用担当</option><option value="admin">管理者</option><option value="mentor">メンター（管理者＋承認）</option></select>
             </label>
             <button :disabled="savingUser" class="button button-primary">{{ savingUser ? '登録中...' : '登録' }}</button>
           </form>
@@ -939,7 +940,7 @@ function openSchedule() {
           <div v-else class="user-list">
             <div v-for="user in managedUsers" :key="user.id" class="user-row">
               <span class="item-title">{{ user.email }}</span>
-              <select :value="user.role" :aria-label="`${user.email}の役割`" @change="changeUserRole(user, $event)"><option value="producer">動画制作担当</option><option value="operator">運用担当</option><option value="admin">管理者</option></select>
+              <select :value="user.role" :aria-label="`${user.email}の役割`" @change="changeUserRole(user, $event)"><option value="producer">動画制作担当</option><option value="operator">運用担当</option><option value="admin">管理者</option><option value="mentor">メンター（管理者＋承認）</option></select>
             </div>
             <p v-if="!managedUsers.length" class="state-message muted">ユーザーがいません。</p>
           </div>
