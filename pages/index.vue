@@ -167,14 +167,6 @@ onMounted(async () => {
     widthState.value = window.innerWidth;
   });
 
-  // バナー画像を読み込む
-  if (isBannerVisible().value)
-    appendFileToState('banner.png', bannerSource);
-
-  // 縦バナー画像を読み込む
-  if (isVerticalBanner().value)
-    appendFileToState('vertical-banner.png', verticalBannerSource);
-
   void pollPlaybackSchedule();
   schedulePollTimer = window.setInterval(() => {
     void pollPlaybackSchedule();

@@ -15,6 +15,10 @@ export default defineNuxtPlugin((nuxtApp) => {
       // 現在時刻を更新
       timeState.value = data;
 
+      // 共有設定の初期化が終わるまではチャイム判定をしない
+      const sharedSettingsReady = useState<boolean>('sharedSettingsReady');
+      if (!sharedSettingsReady.value) return;
+
       // チャイムの有効/無効
       const isChimeEnabledState = isChimeEnabled();
       const isPreChimeEnabledState = isPreChimeEnabled();

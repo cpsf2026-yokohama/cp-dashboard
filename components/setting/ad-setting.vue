@@ -1,4 +1,8 @@
 <script setup lang="ts">
+import { loadSharedBanners, uploadSharedBanner } from '~/composables/useSharedSettings';
+
+const uploadError = ref('');
+const uploading = ref(false);
 // 横型バナー宣伝画像の表示の切り替え
 const bannerVisible = isBannerVisible();
 // 横バナーのソース
@@ -14,10 +18,16 @@ const onBannerUpload = async (e: Event) => {
   const file = e.target.files?.[0];
   if (!file) return;
 
-  // OPFSにファイルを保存
-  saveFile(file, 'banner.png');
-  // メモリ上の画像を更新
-  banner.value = URL.createObjectURL(file);
+  uploadError.value = '';
+  uploading.value = true;
+  try {
+    await uploadSharedBanner('horizontal', file);
+    banner.value = (await loadSharedBanners()).horizontal?.url ?? null;
+  } catch (error) {
+    uploadError.value = error instanceof Error ? error.message : 'バナー画像を保存できませんでした';
+  } finally {
+    uploading.value = false;
+  }
 }
 
 const onVerticalBannerUpload = async (e: Event) => {
@@ -25,10 +35,16 @@ const onVerticalBannerUpload = async (e: Event) => {
   const file = e.target.files?.[0];
   if (!file) return;
 
-  // OPFSにファイルを保存
-  saveFile(file, 'vertical-banner.png');
-  // メモリ上の画像を更新
-  verticalBanner.value = URL.createObjectURL(file);
+  uploadError.value = '';
+  uploading.value = true;
+  try {
+    await uploadSharedBanner('vertical', file);
+    verticalBanner.value = (await loadSharedBanners()).vertical?.url ?? null;
+  } catch (error) {
+    uploadError.value = error instanceof Error ? error.message : 'バナー画像を保存できませんでした';
+  } finally {
+    uploading.value = false;
+  }
 }
 </script>
 <template>
@@ -41,7 +57,7 @@ const onVerticalBannerUpload = async (e: Event) => {
       <span class="label-text"> 17:3(1700x300)サイズの画像を推奨</span>
     </div>
     <input type="file" accept="image/*" class="file-input file-input-bordered file-input-sm w-full"
-      @change="onBannerUpload" />
+      :disabled="uploading" @change="onBannerUpload" />
   </label>
 
   <label class="label cursor-pointer mt-3">
@@ -57,6 +73,7 @@ const onVerticalBannerUpload = async (e: Event) => {
       <span class="label-text"> 23:40(920x1600)サイズの画像を推奨</span>
     </div>
     <input type="file" accept="image/*" class="file-input file-input-bordered file-input-sm w-full"
-      @change="onVerticalBannerUpload" />
+      :disabled="uploading" @change="onVerticalBannerUpload" />
   </label>
+  <p v-if="uploadError" class="text-error text-sm" role="alert">{{ uploadError }}</p>
 </template>

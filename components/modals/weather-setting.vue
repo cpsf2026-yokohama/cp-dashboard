@@ -53,8 +53,8 @@ watch(() => useOnlyTemp.value, async () => {
 onMounted(async () => {
   // エリア情報を取得
   const data = await Promise.all([
-    $fetch<string>('https://www.jma.go.jp/bosai/common/const/area.json'),
-    $fetch<string>('https://www.jma.go.jp/bosai/amedas/const/amedastable.json'),
+    $fetch('https://www.jma.go.jp/bosai/common/const/area.json'),
+    $fetch('https://www.jma.go.jp/bosai/amedas/const/amedastable.json'),
   ]).catch((e) => {
     console.error(e);
     return;

@@ -15,6 +15,47 @@ interface Env {
 const allowedOrigin = "http://localhost:3000";
 
 const localAdminId = "local-test-admin";
+const bannerKinds = ["horizontal", "vertical"] as const;
+type BannerKind = (typeof bannerKinds)[number];
+const maxBannerBytes = 10 * 1024 * 1024;
+
+function bannerKindFromPath(pathname: string): BannerKind | null {
+  const match = /^\/api\/banners\/(horizontal|vertical)$/.exec(pathname);
+  return (match?.[1] as BannerKind | undefined) ?? null;
+}
+
+const sharedSettingKeys = [
+  "countdownDates",
+  "yearlyCountdownDates",
+  "userChimeTimes",
+  "isChimeEnabled",
+  "isPreChimeEnabled",
+  "isBannerVisible",
+  "isVerticalBanner",
+] as const;
+
+type SharedSettingsApply = Record<(typeof sharedSettingKeys)[number], boolean>;
+
+const defaultSharedSettingsApply: SharedSettingsApply = {
+  countdownDates: true,
+  yearlyCountdownDates: true,
+  userChimeTimes: true,
+  isChimeEnabled: true,
+  isPreChimeEnabled: true,
+  isBannerVisible: true,
+  isVerticalBanner: true,
+};
+
+function parseSharedSettingsApply(value: unknown): SharedSettingsApply | null {
+  if (typeof value !== "object" || value === null) return null;
+  const record = value as Record<string, unknown>;
+  if (!sharedSettingKeys.every((key) => typeof record[key] === "boolean")) {
+    return null;
+  }
+  return Object.fromEntries(
+    sharedSettingKeys.map((key) => [key, record[key]]),
+  ) as SharedSettingsApply;
+}
 
 type UserRole = "admin" | "producer" | "operator";
 
@@ -47,6 +88,8 @@ let accessKeysCache: {
 
 export function requiresAccessAuthentication(method: string, pathname: string): boolean {
   return (
+    (method === "PUT" && pathname === "/api/settings") ||
+    ((method === "PUT" || method === "DELETE") && /^\/api\/banners\/(horizontal|vertical)$/.test(pathname)) ||
     (method === "GET" &&
       ["/api/schedules", "/api/videos", "/api/users"].includes(pathname)) ||
     (method === "POST" && ["/api/schedules", "/api/videos", "/api/users"].includes(pathname)) ||
@@ -58,6 +101,8 @@ export function requiresAccessAuthentication(method: string, pathname: string): 
 
 export function hasRoleForRoute(user: Pick<ApiUser, "role">, method: string, pathname: string): boolean {
   if (
+    (method === "PUT" && pathname === "/api/settings") ||
+    ((method === "PUT" || method === "DELETE") && /^\/api\/banners\/(horizontal|vertical)$/.test(pathname)) ||
     (method === "GET" && pathname === "/api/users") ||
     (method === "POST" && pathname === "/api/users") ||
     (method === "PATCH" && /^\/api\/users\/[^/]+$/.test(pathname))
@@ -150,13 +195,19 @@ async function getAccessUser(request: Request, env: Env): Promise<{
     };
   }
 
-  const token = request.headers.get("cf-access-jwt-assertion");
-  if (!token) {
-    return { user: null, response: jsonError("Access authentication required", 401) };
+  if (!env.ACCESS_TEAM_DOMAIN || !env.ACCESS_AUD) {
+    return {
+      user: null,
+      response: jsonError("Access authentication is not configured", 503),
+    };
   }
 
-  if (!env.ACCESS_TEAM_DOMAIN || !env.ACCESS_AUD) {
-    return { user: null, response: jsonError("Access authentication is not configured", 503) };
+  const token = request.headers.get("cf-access-jwt-assertion");
+  if (!token) {
+    return {
+      user: null,
+      response: jsonError("Access authentication required", 401),
+    };
   }
 
   let issuer: string;
@@ -241,7 +292,7 @@ function withCors(response: Response, origin: string | null): Response {
 
     headers.set("Access-Control-Allow-Origin", allowedOrigin);
 
-    headers.set("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS");
+    headers.set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
 
     headers.set("Access-Control-Allow-Headers", "Content-Type");
 
@@ -328,7 +379,7 @@ export default {
       }
     }
 
-let response: Response = jsonError("Not Found", 404);
+    let response: Response = jsonError("Not Found", 404);
 
     if (request.method === "OPTIONS") {
 
@@ -337,6 +388,201 @@ let response: Response = jsonError("Not Found", 404);
     } else if (authResponse) {
 
       response = authResponse;
+
+
+    } else if (request.method === "GET" && url.pathname === "/api/banners") {
+      try {
+        const banners = await Promise.all(bannerKinds.map(async (kind) => {
+          const object = await env.VIDEO_BUCKET.head(`banners/${kind}`);
+          return [kind, object ? {
+            etag: object.httpEtag,
+            size: object.size,
+            contentType: object.httpMetadata?.contentType ?? "application/octet-stream",
+          } : null] as const;
+        }));
+        response = Response.json({ banners: Object.fromEntries(banners) });
+      } catch (error) {
+        console.error("Failed to retrieve banners:", error);
+        response = jsonError("Failed to retrieve banners", 500);
+      }
+    } else if (request.method === "GET" && bannerKindFromPath(url.pathname)) {
+      try {
+        const kind = bannerKindFromPath(url.pathname)!;
+        const object = await env.VIDEO_BUCKET.get(`banners/${kind}`);
+        if (!object) {
+          response = jsonError("Banner not found", 404);
+        } else {
+          const headers = new Headers({
+            "Content-Type": object.httpMetadata?.contentType ?? "application/octet-stream",
+            "Cache-Control": "public, max-age=0, must-revalidate",
+            "ETag": object.httpEtag,
+            "X-Content-Type-Options": "nosniff",
+          });
+          if (request.headers.get("If-None-Match") === object.httpEtag) {
+            response = new Response(null, { status: 304, headers });
+          } else {
+            response = new Response(object.body, { headers });
+          }
+        }
+      } catch (error) {
+        console.error("Failed to retrieve banner:", error);
+        response = jsonError("Failed to retrieve banner", 500);
+      }
+    } else if ((request.method === "PUT" || request.method === "DELETE") && bannerKindFromPath(url.pathname)) {
+      const kind = bannerKindFromPath(url.pathname)!;
+      const key = `banners/${kind}`;
+      if (request.method === "DELETE") {
+        try {
+          await env.VIDEO_BUCKET.delete(key);
+          response = Response.json({ success: true });
+        } catch (error) {
+          console.error("Failed to delete banner:", error);
+          response = jsonError("Failed to delete banner", 500);
+        }
+      } else {
+        const contentType = request.headers.get("Content-Type")?.split(";")[0].trim().toLowerCase() ?? "";
+        const contentLength = Number(request.headers.get("Content-Length") ?? 0);
+        if (!/^image\/(png|jpeg|webp|gif|avif)$/.test(contentType)) {
+          response = jsonError("Only PNG, JPEG, WebP, GIF, and AVIF images are allowed", 415);
+        } else if (contentLength > maxBannerBytes) {
+          response = jsonError("Banner image must be 10 MiB or smaller", 413);
+        } else {
+          try {
+            const bytes = await request.arrayBuffer();
+            if (bytes.byteLength === 0 || bytes.byteLength > maxBannerBytes) {
+              response = jsonError("Banner image must be between 1 byte and 10 MiB", 413);
+            } else {
+              await env.VIDEO_BUCKET.put(key, bytes, { httpMetadata: { contentType } });
+              response = Response.json({ success: true });
+            }
+          } catch (error) {
+            console.error("Failed to save banner:", error);
+            response = jsonError("Failed to save banner", 500);
+          }
+        }
+      }
+    } else if (
+      request.method === "GET" &&
+      url.pathname === "/api/settings"
+    ) {
+      try {
+        const row = await env.DB.prepare(`
+          SELECT settings_json AS settingsJson, apply_json AS applyJson, updated_at AS updatedAt
+          FROM shared_settings
+          WHERE id = 1
+        `).first<{ settingsJson: string; applyJson: string; updatedAt: string }>();
+
+        if (!row) {
+          response = jsonError("Shared settings not found", 404);
+        } else {
+          try {
+            const settings: unknown = JSON.parse(row.settingsJson);
+            let apply = defaultSharedSettingsApply;
+            try {
+              apply = parseSharedSettingsApply(JSON.parse(row.applyJson)) ?? defaultSharedSettingsApply;
+            } catch {
+              apply = defaultSharedSettingsApply;
+            }
+            response = Response.json({
+              settings,
+              apply,
+              updatedAt: row.updatedAt,
+            });
+          } catch {
+            response = jsonError("Stored settings are invalid", 500);
+          }
+        }
+      } catch (error) {
+        console.error("Failed to retrieve shared settings:", error);
+        response = jsonError("Failed to retrieve shared settings", 500);
+      }
+    } else if (
+      request.method === "PUT" &&
+      url.pathname === "/api/settings"
+    ) {
+      try {
+        const body: unknown = await request.json();
+
+        if (
+          typeof body !== "object" ||
+          body === null ||
+          Array.isArray(body) ||
+          (!("settings" in body) && !("apply" in body))
+        ) {
+          response = jsonError("settings or apply is required", 400);
+        } else {
+          const input = body as { settings?: unknown; apply?: unknown; adminEdit?: unknown };
+          const nextApply = input.apply === undefined
+            ? null
+            : parseSharedSettingsApply(input.apply);
+
+          if (input.apply !== undefined && !nextApply) {
+            response = jsonError("apply must contain a boolean for each setting", 400);
+          } else {
+            const current = await env.DB.prepare(`
+              SELECT settings_json AS settingsJson, apply_json AS applyJson
+              FROM shared_settings
+              WHERE id = 1
+            `).first<{ settingsJson: string; applyJson: string }>();
+
+            if (!current) {
+              response = jsonError("Shared settings not found", 404);
+            } else {
+              try {
+                const storedSettings: unknown = JSON.parse(current.settingsJson);
+                const nextSettings: Record<string, unknown> = typeof storedSettings === "object" && storedSettings !== null
+                  ? { ...(storedSettings as Record<string, unknown>) }
+                  : {};
+                let storedApply = defaultSharedSettingsApply;
+                try {
+                  storedApply = parseSharedSettingsApply(JSON.parse(current.applyJson)) ?? defaultSharedSettingsApply;
+                } catch {
+                  storedApply = defaultSharedSettingsApply;
+                }
+                const effectiveApply = nextApply ?? storedApply;
+                let invalidSettings = false;
+
+                if (input.settings !== undefined) {
+                  if (typeof input.settings !== "object" || input.settings === null || Array.isArray(input.settings)) {
+                    response = jsonError("settings must be an object", 400);
+                    invalidSettings = true;
+                  } else {
+                    const incoming = input.settings as Record<string, unknown>;
+                    for (const key of sharedSettingKeys) {
+                      if ((input.adminEdit === true || effectiveApply[key]) && key in incoming) {
+                        nextSettings[key] = incoming[key];
+                      }
+                    }
+                  }
+                }
+
+                if (!invalidSettings) {
+                  const settingsJson = JSON.stringify(nextSettings);
+                  const applyJson = JSON.stringify(effectiveApply);
+                  if (settingsJson.length > 100_000) {
+                    response = jsonError("Settings are too large", 400);
+                  } else {
+                    await env.DB.prepare(`
+                      UPDATE shared_settings
+                      SET settings_json = ?, apply_json = ?, updated_at = datetime('now')
+                      WHERE id = 1
+                    `)
+                      .bind(settingsJson, applyJson)
+                      .run();
+                    response = Response.json({ success: true });
+                  }
+                }
+              } catch (error) {
+                console.error("Failed to parse shared settings:", error);
+                response = jsonError("Stored settings are invalid", 500);
+              }
+            }
+          }
+        }
+      } catch (error) {
+        console.error("Failed to update shared settings:", error);
+        response = jsonError("Failed to update shared settings", 500);
+      }
 
     } else if (request.method === "GET" && url.pathname === "/api/users") {
 
@@ -645,11 +891,11 @@ let response: Response = jsonError("Not Found", 404);
 
             } else {
 
-                const id = crypto.randomUUID();
+              const id = crypto.randomUUID();
 
-                const normalizedStartsAt = startsAtDate.toISOString();
+              const normalizedStartsAt = startsAtDate.toISOString();
 
-                await env.DB.prepare(`
+              await env.DB.prepare(`
 
                   INSERT INTO schedules (
 
@@ -667,52 +913,52 @@ let response: Response = jsonError("Not Found", 404);
 
                 `)
 
-                  .bind(
+                .bind(
+
+                  id,
+
+                  body.videoId,
+
+                  normalizedStartsAt,
+
+                  accessUser!.id,
+
+                )
+
+                .run();
+
+              await recordAuditLog(env, accessUser!.id, "schedule.created", "schedule", id, {
+                videoId: body.videoId,
+                startsAt: normalizedStartsAt,
+              });
+
+              response = Response.json(
+
+                {
+
+                  schedule: {
 
                     id,
 
-                    body.videoId,
+                    videoId: body.videoId,
 
-                    normalizedStartsAt,
+                    startsAt: normalizedStartsAt,
 
-                    accessUser!.id,
-
-                  )
-
-                  .run();
-
-                await recordAuditLog(env, accessUser!.id, "schedule.created", "schedule", id, {
-                  videoId: body.videoId,
-                  startsAt: normalizedStartsAt,
-                });
-
-                response = Response.json(
-
-                  {
-
-                    schedule: {
-
-                      id,
-
-                      videoId: body.videoId,
-
-                      startsAt: normalizedStartsAt,
-
-                      createdBy: accessUser!.id,
-
-                    },
+                    createdBy: accessUser!.id,
 
                   },
 
-                  { status: 201 },
+                },
 
-                );
+                { status: 201 },
 
-              }
+              );
 
             }
 
           }
+
+        }
 
       } catch (error) {
 
@@ -961,32 +1207,32 @@ let response: Response = jsonError("Not Found", 404);
                   end = Math.min(end, object.size - 1);
                   range = { offset: start, length: end - start + 1 };
                 }
-            }
+              }
 
-            if (!rangeInvalid) {
-              const body = await env.VIDEO_BUCKET.get(
-                video.r2Key,
-                range ? { range } : undefined,
-              );
-              if (!body || !("body" in body) || !body.body) {
-                response = jsonError("Video file not found", 404);
-              } else {
-                const headers = new Headers({
-                  "Content-Type": video.contentType,
-                  "Accept-Ranges": "bytes",
-                  "Content-Length": String(range ? end - start + 1 : object.size),
-                });
-                if (range) {
-                  headers.set("Content-Range", `bytes ${start}-${end}/${object.size}`);
+              if (!rangeInvalid) {
+                const body = await env.VIDEO_BUCKET.get(
+                  video.r2Key,
+                  range ? { range } : undefined,
+                );
+                if (!body || !("body" in body) || !body.body) {
+                  response = jsonError("Video file not found", 404);
+                } else {
+                  const headers = new Headers({
+                    "Content-Type": video.contentType,
+                    "Accept-Ranges": "bytes",
+                    "Content-Length": String(range ? end - start + 1 : object.size),
+                  });
+                  if (range) {
+                    headers.set("Content-Range", `bytes ${start}-${end}/${object.size}`);
+                  }
+                  response = new Response(body.body, {
+                    status: range ? 206 : 200,
+                    headers,
+                  });
                 }
-                response = new Response(body.body, {
-                  status: range ? 206 : 200,
-                  headers,
-                });
               }
             }
           }
-        }
         }
       } catch (error) {
         console.error("Failed to stream video:", error);
@@ -1089,26 +1335,26 @@ let response: Response = jsonError("Not Found", 404);
               413,
             );
           } else {
-              const id = crypto.randomUUID();
-              const r2Key = `videos/${id}`;
-              const title = titleValue.trim();
-              const contentType = fileValue.type;
+            const id = crypto.randomUUID();
+            const r2Key = `videos/${id}`;
+            const title = titleValue.trim();
+            const contentType = fileValue.type;
 
-              // Save the video file to R2.
-              await env.VIDEO_BUCKET.put(
-                r2Key,
-                fileValue.stream(),
-                {
-                  httpMetadata: {
-                    contentType,
-                  },
+            // Save the video file to R2.
+            await env.VIDEO_BUCKET.put(
+              r2Key,
+              fileValue.stream(),
+              {
+                httpMetadata: {
+                  contentType,
                 },
-              );
+              },
+            );
 
-              uploadedKey = r2Key;
+            uploadedKey = r2Key;
 
-              // Save video metadata to D1.
-              await env.DB.prepare(`
+            // Save video metadata to D1.
+            await env.DB.prepare(`
                 INSERT INTO videos (
                   id,
                   title,
@@ -1119,36 +1365,36 @@ let response: Response = jsonError("Not Found", 404);
                 )
                 VALUES (?, ?, ?, ?, ?, ?)
               `)
-                .bind(
+              .bind(
+                id,
+                title,
+                r2Key,
+                contentType,
+                fileValue.size,
+                accessUser!.id,
+              )
+              .run();
+
+            await recordAuditLog(env, accessUser!.id, "video.uploaded", "video", id, {
+              title,
+              contentType,
+              sizeBytes: fileValue.size,
+            });
+
+            response = Response.json(
+              {
+                video: {
                   id,
                   title,
-                  r2Key,
                   contentType,
-                  fileValue.size,
-                  accessUser!.id,
-                )
-                .run();
-
-              await recordAuditLog(env, accessUser!.id, "video.uploaded", "video", id, {
-                title,
-                contentType,
-                sizeBytes: fileValue.size,
-              });
-
-              response = Response.json(
-                {
-                  video: {
-                    id,
-                    title,
-                    contentType,
-                    sizeBytes: fileValue.size,
-                  },
+                  sizeBytes: fileValue.size,
                 },
-                { status: 201 },
-              );
+              },
+              { status: 201 },
+            );
 
-              // Upload and metadata insert succeeded; no cleanup needed.
-              uploadedKey = null;
+            // Upload and metadata insert succeeded; no cleanup needed.
+            uploadedKey = null;
           }
         }
       } catch (error) {

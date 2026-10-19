@@ -1,4 +1,29 @@
 <script setup lang="ts">
+import {
+  hasLocalSettingsBackup,
+  restoreLocalSettingsBackup,
+} from '../../composables/useSharedSettings';
+
+const hasSettingsBackup = ref(false);
+const backupRestoreMessage = ref('');
+
+onMounted(() => {
+  hasSettingsBackup.value = hasLocalSettingsBackup();
+});
+
+const restorePreviousSettings = () => {
+  try {
+    const restoredCount = restoreLocalSettingsBackup();
+    backupRestoreMessage.value = restoredCount
+      ? `以前の端末設定 ${restoredCount} 項目を反映しました。管理画面の反映設定に従って共有先へ保存されます。`
+      : '取り込める以前の設定がありませんでした。';
+  } catch (error) {
+    backupRestoreMessage.value = error instanceof Error
+      ? error.message
+      : 'バックアップを復元できませんでした。';
+  }
+};
+
 // チャイムの音源
 const chimeSourceState = chimeSource();
 // チャイムのファイル名
@@ -124,6 +149,25 @@ const playAudio = (audio: HTMLAudioElement) => {
     <DynamicModal :btn-wfull="true" btnTitle="カウントダウン設定">
       <CountdownSetting></CountdownSetting>
     </DynamicModal>
+
+    <div class="divider"></div>
+
+    <h4 class="font-bold">以前の端末設定</h4>
+    <p class="py-2 text-sm">
+      共有設定を使い始める前のこの端末の設定を、現在の共有設定に取り込みます。
+      バックアップに値がない項目は現在の共有設定を保ちます。管理画面で反映対象にした項目は共有先へ保存されます。
+    </p>
+    <button
+      type="button"
+      class="btn btn-outline btn-sm w-full"
+      :disabled="!hasSettingsBackup"
+      @click="restorePreviousSettings"
+    >
+      以前の端末設定を取り込む
+    </button>
+    <p v-if="backupRestoreMessage" class="pt-2 text-sm" role="status">
+      {{ backupRestoreMessage }}
+    </p>
 
     <div class="divider"></div>
 

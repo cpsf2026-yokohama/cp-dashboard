@@ -1,5 +1,18 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue'
+import {
+  DEFAULT_SHARED_SETTINGS_POLICY,
+  SHARED_SETTING_KEYS,
+  deleteSharedBanner,
+  loadSharedBanners,
+  loadSharedSettings,
+  saveSharedSettingsPolicy,
+  uploadSharedBanner,
+  type SharedBannerInfo,
+  type SharedBannerKind,
+  type SharedSettings,
+  type SharedSettingsPolicy,
+} from '../composables/useSharedSettings'
 
 type Video = {
   id: string
@@ -34,7 +47,7 @@ type Schedule = ApiSchedule & {
 
 const API_BASE = useVideoApiBase()
 
-const activeTab = ref<'overview' | 'videos' | 'schedule' | 'users'>('overview')
+const activeTab = ref<'overview' | 'videos' | 'schedule' | 'users' | 'settings'>('overview')
 const canManageUsers = ref(false)
 const managedUsers = ref<ManagedUser[]>([])
 const usersLoading = ref(false)
@@ -51,6 +64,23 @@ const uploading = ref(false)
 const deletingVideoId = ref<string | null>(null)
 const showAddSchedule = ref(false)
 const scheduleDialog = ref<HTMLDialogElement | null>(null)
+const settingsPolicy = ref<SharedSettingsPolicy>({ ...DEFAULT_SHARED_SETTINGS_POLICY })
+const settingsPolicyLoading = ref(false)
+const settingsPolicySaving = ref(false)
+const sharedSettings = ref<SharedSettings | null>(null)
+const settingsValuesSaving = ref(false)
+const bannerInfo = ref<Record<SharedBannerKind, SharedBannerInfo | null>>({ horizontal: null, vertical: null })
+const bannerUploading = ref<SharedBannerKind | null>(null)
+const bannerDeleting = ref<SharedBannerKind | null>(null)
+const settingLabels: Record<keyof SharedSettingsPolicy, string> = {
+  countdownDates: '日付指定カウントダウン',
+  yearlyCountdownDates: '毎年のカウントダウン',
+  userChimeTimes: 'チャイム時刻',
+  isChimeEnabled: 'チャイムの有効状態',
+  isPreChimeEnabled: '予鈴の有効状態',
+  isBannerVisible: '横型バナーの表示状態',
+  isVerticalBanner: '縦型バナーの表示状態',
+}
 
 watch(showAddSchedule, async (open) => {
   await nextTick()
@@ -195,6 +225,101 @@ async function loadVideos() {
   }
 }
 
+async function loadSettingsPolicy() {
+  settingsPolicyLoading.value = true
+  try {
+    const data = await loadSharedSettings()
+    settingsPolicy.value = { ...data.apply }
+    sharedSettings.value = structuredClone(data.settings)
+    bannerInfo.value = await loadSharedBanners()
+  } catch (error) {
+    console.error('Failed to load shared settings policy:', error)
+    showNotice('共有設定の反映対象を読み込めませんでした。', true)
+  } finally {
+    settingsPolicyLoading.value = false
+  }
+}
+
+async function uploadBanner(kind: SharedBannerKind, event: Event) {
+  const input = event.target
+  if (!(input instanceof HTMLInputElement)) return
+  const file = input.files?.[0]
+  if (!file) return
+  bannerUploading.value = kind
+  try {
+    await uploadSharedBanner(kind, file)
+    bannerInfo.value = await loadSharedBanners()
+    showNotice(`${kind === 'horizontal' ? '横型' : '縦型'}バナーを保存しました。サイトへ自動反映されます。`)
+  } catch (error) {
+    showNotice(`バナーを保存できませんでした：${error instanceof Error ? error.message : '不明なエラー'}`, true)
+  } finally {
+    bannerUploading.value = null
+    input.value = ''
+  }
+}
+
+async function removeBanner(kind: SharedBannerKind) {
+  const label = kind === 'horizontal' ? '横型' : '縦型'
+  if (!bannerInfo.value[kind] || bannerDeleting.value) return
+  if (!window.confirm(`${label}バナー画像をサーバーから削除しますか？`)) return
+  bannerDeleting.value = kind
+  try {
+    await deleteSharedBanner(kind)
+    bannerInfo.value = await loadSharedBanners()
+    showNotice(`${label}バナーを削除しました。サイトへ自動反映されます。`)
+  } catch (error) {
+    showNotice(`バナーを削除できませんでした：${error instanceof Error ? error.message : '不明なエラー'}`, true)
+  } finally {
+    bannerDeleting.value = null
+  }
+}
+
+async function saveSettingsValues() {
+  if (!sharedSettings.value || settingsValuesSaving.value) return
+  settingsValuesSaving.value = true
+  try {
+    const response = await fetch(`${API_BASE}/settings`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ settings: sharedSettings.value, adminEdit: true }),
+    })
+    if (!response.ok) throw new Error(`HTTP ${response.status}`)
+    showNotice('共有設定の値を保存しました。端末には次回の自動取得時に反映されます。')
+  } catch (error) {
+    console.error('Failed to save shared settings values:', error)
+    showNotice(`設定値を保存できませんでした：${error instanceof Error ? error.message : '不明なエラー'}`, true)
+  } finally {
+    settingsValuesSaving.value = false
+  }
+}
+
+function addAdminChimeTime() {
+  if (!sharedSettings.value) return
+  sharedSettings.value.userChimeTimes.push({ time: '00:00', chime: true, preChime: false })
+}
+
+function addAdminCountdown(yearly: boolean) {
+  if (!sharedSettings.value) return
+  sharedSettings.value[yearly ? 'yearlyCountdownDates' : 'countdownDates'].push({
+    date: yearly ? '01-01' : new Date().toLocaleDateString('sv-SE'),
+    label: '', color: 'gray', type: yearly ? 'yearly' : 'once',
+  })
+}
+
+async function saveSettingsPolicy() {
+  if (settingsPolicySaving.value) return
+  settingsPolicySaving.value = true
+  try {
+    await saveSharedSettingsPolicy(settingsPolicy.value)
+    showNotice('共有設定の反映対象を保存しました。端末には次回の自動取得時に反映されます。')
+  } catch (error) {
+    console.error('Failed to save shared settings policy:', error)
+    showNotice(`反映対象を保存できませんでした：${error instanceof Error ? error.message : '不明なエラー'}`, true)
+  } finally {
+    settingsPolicySaving.value = false
+  }
+}
+
 async function loadUsers() {
   if (!canManageUsers.value) return
   usersLoading.value = true
@@ -290,6 +415,7 @@ async function loadSchedules() {
 
 async function loadAll() {
   await Promise.all([loadVideos(), loadSchedules()])
+  if (canManageUsers.value) await loadSettingsPolicy()
 }
 
 void loadAll()
@@ -552,17 +678,22 @@ function openSchedule() {
       </header>
 
       <nav class="admin-tabs" aria-label="管理メニュー">
-        <button
+        <template
           v-for="tab in [
             { id: 'overview', label: '概要' },
             { id: 'videos', label: '動画ライブラリ' },
             { id: 'schedule', label: 'スケジュール' },
+            { id: 'settings', label: '端末への反映' },
           ]"
           :key="tab.id"
-          :class="{ active: activeTab === tab.id }"
-          :aria-current="activeTab === tab.id ? 'page' : undefined"
-          @click="activeTab = tab.id as typeof activeTab"
-        >{{ tab.label }}</button>
+        >
+          <button
+            v-if="tab.id !== 'settings' || canManageUsers"
+            :class="{ active: activeTab === tab.id }"
+            :aria-current="activeTab === tab.id ? 'page' : undefined"
+            @click="activeTab = tab.id as typeof activeTab; tab.id === 'settings' && void loadSettingsPolicy()"
+          >{{ tab.label }}</button>
+        </template>
         <button
           v-if="canManageUsers"
           :class="{ active: activeTab === 'users' }"
@@ -688,6 +819,94 @@ function openSchedule() {
               </div>
             </div>
           </div>
+        </section>
+      </template>
+
+      <template v-else-if="activeTab === 'settings' && canManageUsers">
+        <section class="panel">
+          <div class="section-heading">
+            <div>
+              <h2>共有設定の値を編集</h2>
+              <p class="help">ここで保存した予定やチャイム時刻は、反映対象のチェック状態にかかわらずサーバーに保存されます。</p>
+            </div>
+            <button class="button button-primary" :disabled="settingsPolicyLoading || settingsValuesSaving || !sharedSettings" @click="void saveSettingsValues()">
+              {{ settingsValuesSaving ? '保存中...' : '設定値を保存' }}
+            </button>
+          </div>
+          <p v-if="settingsPolicyLoading" class="state-message muted" role="status">共有設定を読み込み中...</p>
+          <template v-else-if="sharedSettings">
+            <div class="settings-value-grid">
+              <label class="check-field"><input v-model="sharedSettings.isChimeEnabled" type="checkbox"><span>チャイムを有効にする</span></label>
+              <label class="check-field"><input v-model="sharedSettings.isPreChimeEnabled" type="checkbox"><span>予鈴を有効にする</span></label>
+              <label class="check-field"><input v-model="sharedSettings.isBannerVisible" type="checkbox"><span>横型バナーを表示する</span></label>
+              <label class="check-field"><input v-model="sharedSettings.isVerticalBanner" type="checkbox"><span>縦型バナーを表示する</span></label>
+            </div>
+            <div class="admin-setting-block">
+              <div class="section-heading">
+                <div><h3>バナー画像</h3><p class="help">画像はサーバーに保存され、各サイトへ自動配信されます。PNG・JPEG・WebP・GIF・AVIF、10 MiB以下。</p></div>
+              </div>
+              <div class="banner-management-grid">
+                <article v-for="item in [
+                  { kind: 'horizontal' as const, title: '横型バナー', recommendation: '推奨 1700 × 300 px' },
+                  { kind: 'vertical' as const, title: '縦型バナー', recommendation: '推奨 920 × 1600 px' },
+                ]" :key="item.kind" class="banner-management-card">
+                  <div class="banner-preview">
+                    <img v-if="bannerInfo[item.kind]" :src="bannerInfo[item.kind]!.url" :alt="`${item.title}のプレビュー`">
+                    <span v-else class="help">画像は未登録です</span>
+                  </div>
+                  <div class="section-heading">
+                    <div><h4>{{ item.title }}</h4><p class="help">{{ bannerInfo[item.kind] ? `${(bannerInfo[item.kind]!.size / (1024 * 1024)).toFixed(2)} MiB` : item.recommendation }}</p></div>
+                    <button v-if="bannerInfo[item.kind]" class="button button-small button-danger" :disabled="bannerDeleting !== null || bannerUploading !== null" @click="void removeBanner(item.kind)">{{ bannerDeleting === item.kind ? '削除中...' : '画像を削除' }}</button>
+                  </div>
+                  <label class="field"><span>{{ bannerInfo[item.kind] ? '画像を差し替え' : '画像を追加' }}</span><input type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/avif" :disabled="bannerUploading !== null || bannerDeleting !== null" @change="uploadBanner(item.kind, $event)"></label>
+                  <p class="help">{{ item.recommendation }}</p>
+                </article>
+              </div>
+            </div>
+            <div class="admin-setting-block">
+              <div class="section-heading"><div><h3>チャイム時刻</h3><p class="help">各時刻のチャイムと予鈴を設定します。</p></div><button class="button button-small" @click="addAdminChimeTime">時刻を追加</button></div>
+              <div class="admin-chime-list">
+                <div v-for="(item, index) in sharedSettings.userChimeTimes" :key="index" class="admin-chime-row">
+                  <input v-model="item.time" type="time" :aria-label="`チャイム時刻 ${index + 1}`">
+                  <label class="check-field"><input v-model="item.chime" type="checkbox">チャイム</label>
+                  <label class="check-field"><input v-model="item.preChime" type="checkbox">予鈴</label>
+                  <button class="button button-small button-danger" :aria-label="`${item.time}を削除`" @click="sharedSettings.userChimeTimes.splice(index, 1)">削除</button>
+                </div>
+              </div>
+            </div>
+            <div v-for="group in [
+              { key: 'countdownDates' as const, title: '日付指定の予定', yearly: false },
+              { key: 'yearlyCountdownDates' as const, title: '毎年繰り返す予定', yearly: true },
+            ]" :key="group.key" class="admin-setting-block">
+              <div class="section-heading"><div><h3>{{ group.title }}</h3><p class="help">カウントダウンに表示する予定を編集します。</p></div><button class="button button-small" @click="addAdminCountdown(group.yearly)">予定を追加</button></div>
+              <p v-if="sharedSettings[group.key].length === 0" class="help">予定はありません。</p>
+              <div v-for="(item, index) in sharedSettings[group.key]" :key="index" class="admin-countdown-row">
+                <input v-model="item.date" :type="group.yearly ? 'text' : 'date'" :placeholder="group.yearly ? 'MM-DD' : undefined" :aria-label="`${group.title}の日付 ${index + 1}`">
+                <input v-model="item.label" type="text" maxlength="80" placeholder="予定名" :aria-label="`${group.title}の予定名 ${index + 1}`">
+                <select v-model="item.color" :aria-label="`${group.title}の色 ${index + 1}`"><option v-for="color in ['gray', 'red', 'yellow', 'green', 'teal', 'blue', 'indigo', 'purple', 'pink']" :key="color" :value="color">{{ color }}</option></select>
+                <button class="button button-small button-danger" :aria-label="`${item.label || '予定'}を削除`" @click="sharedSettings[group.key].splice(index, 1)">削除</button>
+              </div>
+            </div>
+          </template>
+        </section>
+        <section class="panel">
+          <div class="section-heading">
+            <div>
+              <h2>端末へ自動反映する設定</h2>
+              <p class="help">チェックした項目をサーバーから各端末へ自動反映します。端末は約15秒ごとに更新を確認します。</p>
+            </div>
+            <button class="button button-primary" :disabled="settingsPolicyLoading || settingsPolicySaving" @click="void saveSettingsPolicy()">
+              {{ settingsPolicySaving ? '保存中...' : '反映対象を保存' }}
+            </button>
+          </div>
+          <p v-if="settingsPolicyLoading" class="state-message muted" role="status">反映対象を読み込み中...</p>
+          <div v-else class="settings-policy-list">
+            <label v-for="settingKey in SHARED_SETTING_KEYS" :key="settingKey" class="check-field">
+              <input v-model="settingsPolicy[settingKey]" type="checkbox" :disabled="settingsPolicySaving">
+              <span>{{ settingLabels[settingKey] }}</span>
+            </label>
+          </div>
+          <p class="help">チェックを外した項目は端末へ配信されず、他の端末からの保存でもサーバー上の値を保ちます。</p>
         </section>
       </template>
 
@@ -819,6 +1038,23 @@ h2 { font-size: 18px; font-weight: 600; line-height: 1.5; }
 .upload-form { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; gap: 14px; align-items: end; }
 .library-filters { display: flex; gap: 16px; align-items: center; }
 .check-field { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
+.settings-policy-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; margin: 18px 0; }
+.settings-value-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin: 12px 0 20px; }
+.admin-setting-block { margin-top: 20px; padding-top: 18px; border-top: 1px solid var(--admin-border); }
+.admin-setting-block h3 { font-size: 15px; font-weight: 600; }
+.admin-setting-block h4 { font-size: 14px; font-weight: 600; }
+.banner-management-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 14px; }
+.banner-management-card { display: flex; flex-direction: column; gap: 10px; padding: 14px; border: 1px solid var(--admin-border); border-radius: 8px; }
+.banner-preview { display: flex; align-items: center; justify-content: center; min-height: 160px; overflow: hidden; border-radius: 6px; background: #f3f4f6; }
+.banner-preview img { display: block; max-width: 100%; max-height: 220px; object-fit: contain; }
+.banner-management-card .section-heading { margin: 0; }
+.admin-chime-list, .admin-countdown-row { display: grid; gap: 8px; }
+.admin-chime-row { display: grid; grid-template-columns: minmax(120px, 180px) auto auto auto; align-items: center; gap: 14px; padding: 8px 0; border-bottom: 1px solid #e5e7eb; }
+.admin-countdown-row { grid-template-columns: minmax(130px, 190px) minmax(160px, 1fr) minmax(100px, 140px) auto; align-items: center; margin: 8px 0; }
+@media (max-width: 640px) {
+  .admin-chime-row { grid-template-columns: 1fr 1fr; }
+  .admin-countdown-row { grid-template-columns: 1fr 1fr; }
+}
 .library-filters input[type='search'] { width: 240px; }
 .video-table { width: 100%; border-collapse: collapse; table-layout: fixed; }
 .video-table th { padding: 8px 12px 8px 0; text-align: left; color: var(--admin-muted); font-weight: 400; font-size: 12px; border-bottom: 1px solid var(--admin-border); }
