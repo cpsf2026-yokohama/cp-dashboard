@@ -343,7 +343,7 @@ function isUserRole(value: unknown): value is UserRole {
 function isDashboardMutation(method: string, pathname: string): boolean {
   return (method === "PUT" && pathname === "/api/settings") ||
     ((method === "PUT" || method === "DELETE") && /^\/api\/banners\/(horizontal|vertical)$/.test(pathname)) ||
-    (method === "POST" && ["/api/schedules", "/api/videos"].includes(pathname)) ||
+    (method === "POST" && pathname === "/api/schedules") ||
     (method === "DELETE" && (/^\/api\/schedules\/[^/]+$/.test(pathname) || /^\/api\/videos\/[^/]+$/.test(pathname)));
 }
 
@@ -521,7 +521,24 @@ export default {
           if (!body || (!body.settings && !body.apply)) throw new Error("settings or apply is required");
           if (body.settings !== undefined && (typeof body.settings !== "object" || body.settings === null || Array.isArray(body.settings))) throw new Error("settings must be an object");
           if (body.apply !== undefined && !parseSharedSettingsApply(body.apply)) throw new Error("Invalid apply settings");
-          kind = "settings"; summary = "共有設定を変更"; payload = { settings: body.settings ?? {}, apply: body.apply, adminEdit: body.adminEdit === true };
+          kind = "settings";
+          const labels: Record<string, string> = {
+            countdownDates: "カウントダウン予定", yearlyCountdownDates: "毎年の予定", userChimeTimes: "チャイム時刻",
+            isChimeEnabled: "チャイム", isPreChimeEnabled: "予鈴", isBannerVisible: "横バナー", isVerticalBanner: "縦バナー",
+          };
+          const settings = (body.settings ?? {}) as Record<string, unknown>;
+          const changes = Object.keys(settings).filter(key => sharedSettingKeys.includes(key as typeof sharedSettingKeys[number]));
+          const descriptions = changes.map(key => {
+            if (key === "isBannerVisible" || key === "isVerticalBanner" || key === "isChimeEnabled" || key === "isPreChimeEnabled") {
+              return `${labels[key]}を${settings[key] === false ? "無効化" : "有効化"}`;
+            }
+            return `${labels[key] ?? key}を更新`;
+          });
+          if (body.apply && typeof body.apply === "object") {
+            for (const key of sharedSettingKeys) if ((body.apply as Record<string, unknown>)[key] === false) descriptions.push(`${labels[key]}をサイトに反映しない`);
+          }
+          summary = descriptions.length ? descriptions.join("・") : "共有設定を変更";
+          payload = { settings, apply: body.apply, adminEdit: body.adminEdit === true };
         } else if (bannerKind && request.method === "DELETE") {
           kind = "banner.delete"; summary = `${bannerKind === "horizontal" ? "横" : "縦"}型バナーを削除`; payload = { kind: bannerKind };
         } else if (bannerKind && request.method === "PUT") {
@@ -536,19 +553,21 @@ export default {
           const body = await request.json() as Record<string, unknown>;
           const startsAt = new Date(String(body.startsAt));
           if (typeof body.videoId !== "string" || Number.isNaN(startsAt.getTime())) throw new Error("videoId and valid startsAt are required");
-          const video = await env.DB.prepare("SELECT id FROM videos WHERE id = ?").bind(body.videoId).first();
+          const video = await env.DB.prepare("SELECT id, title FROM videos WHERE id = ?").bind(body.videoId).first<{ id: string; title?: string }>();
           if (!video) throw new Error("Video not found");
-          kind = "schedule.create"; summary = "再生スケジュールを追加"; payload = { videoId: body.videoId, startsAt: startsAt.toISOString(), id: crypto.randomUUID() };
+          kind = "schedule.create"; summary = `予定を追加: ${video.title ?? "動画"}`; payload = { videoId: body.videoId, videoTitle: video.title, startsAt: startsAt.toISOString(), id: crypto.randomUUID() };
         } else if (request.method === "DELETE" && /^\/api\/schedules\/[^/]+$/.test(url.pathname)) {
-          kind = "schedule.delete"; summary = "再生スケジュールを削除"; payload = { id: decodeURIComponent(url.pathname.slice("/api/schedules/".length)) };
+          const id = decodeURIComponent(url.pathname.slice("/api/schedules/".length));
+          const schedule = await env.DB.prepare("SELECT videos.title AS title, schedules.starts_at AS startsAt FROM schedules JOIN videos ON videos.id = schedules.video_id WHERE schedules.id = ?").bind(id).first<{ title?: string; startsAt?: string }>();
+          kind = "schedule.delete"; summary = `予定を削除: ${schedule?.title ?? "動画"}`; payload = { id, videoTitle: schedule?.title, startsAt: schedule?.startsAt };
         } else if (request.method === "DELETE" && /^\/api\/videos\/[^/]+$/.test(url.pathname)) {
           const id = decodeURIComponent(url.pathname.slice("/api/videos/".length));
-          const video = await env.DB.prepare("SELECT r2_key AS r2Key, uploaded_by AS uploadedBy FROM videos WHERE id = ?").bind(id).first<{ r2Key: string; uploadedBy: string }>();
+          const video = await env.DB.prepare("SELECT r2_key AS r2Key, uploaded_by AS uploadedBy, title FROM videos WHERE id = ?").bind(id).first<{ r2Key: string; uploadedBy: string; title?: string }>();
           if (!video) throw new Error("Video not found");
           if (accessUser!.role !== "admin" && accessUser!.role !== "mentor" && video.uploadedBy !== accessUser!.id) throw new Error("You can only delete videos you uploaded");
           const scheduled = await env.DB.prepare("SELECT id FROM schedules WHERE video_id = ? LIMIT 1").bind(id).first();
           if (scheduled) throw new Error("Remove this video's schedules before deleting it");
-          kind = "video.delete"; summary = "動画を削除"; payload = { id };
+          kind = "video.delete"; summary = `動画を削除: ${video.title ?? "動画"}`; payload = { id, title: video.title };
         } else if (request.method === "POST" && url.pathname === "/api/videos") {
           const form = await request.formData(); const file = form.get("file"); const title = form.get("title");
           if (!(file instanceof File) || typeof title !== "string" || !title.trim() || file.size < 1 || file.size > 100 * 1024 * 1024 || !file.type.startsWith("video/")) throw new Error("動画名と100 MiB以下の動画ファイルが必要です");

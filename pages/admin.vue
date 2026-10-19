@@ -477,7 +477,7 @@ async function uploadVideo() {
     uploadFile.value = null
     if (uploadFileInput.value) uploadFileInput.value.value = ''
     await loadVideos()
-    showNotice('動画の登録を申請しました。メンターの承認後にライブラリへ反映されます。')
+    showNotice('動画をアップロードしてライブラリに登録しました。再生予定への追加はメンターの承認後に反映されます。')
   } catch (error) {
     console.error('Failed to upload video:', error)
     showNotice(
