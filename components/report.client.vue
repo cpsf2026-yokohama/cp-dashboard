@@ -23,6 +23,7 @@ const needCountdownAlert = useState('needCountdownAlert', () => false);
 
 // 消費した日数の割合
 const countdownRatio = useState('countdownRatio', () => 0);
+const isEventDay = computed(() => countdownLimit.value > 0 && countdownLimitDays.value < 1);
 
 /// イベントカウントダウンのステータスを更新
 function refleshReportStatus(djs: dayjs.Dayjs = dayjs()) {
@@ -99,9 +100,14 @@ const verticalBanner = verticalBannerSource();
     <div class="flex flex-col items-center">
       <h2 class="text-[2vw] max-2xl:text-4xl mb-3 font-medium">{{ countdownName }}</h2>
       <div
-        :class="['radial-progress', 'text-[4vw]', 'max-2xl:text-6xl', 'font-bold', needCountdownAlert ? 'text-red-600' : 'text-primary']"
+        :class="['radial-progress', 'text-[4vw]', 'max-2xl:text-6xl', 'font-bold', needCountdownAlert && !isEventDay ? 'text-red-600' : 'text-primary', isEventDay ? 'event-day-progress' : '']"
         :style="{ '--value': countdownRatio, '--size': wSize >= 1536 ? '15vw' : '220px', '--thickness': wSize >= 1536 ? '2vw' : '30px' }">
-        {{ Math.floor(countdownLimitDays) }}日
+        <span>{{ Math.floor(countdownLimitDays) }}日</span>
+      </div>
+      <div v-if="isEventDay" class="event-day-celebration" role="status" aria-live="polite">
+        <span aria-hidden="true">✦</span>
+        <strong>本日開催！</strong>
+        <span aria-hidden="true">✦</span>
       </div>
       <div v-if="needCountdownAlert && dayjs.duration(countdownLimit).asHours() >= 24" class="mt-3 flex flex-col items-center">
         <span class="text-[1.6vw]">残り時間</span>
@@ -117,3 +123,49 @@ const verticalBanner = verticalBannerSource();
     <img v-if="verticalBanner != null" class="max-h-[45vh] border" :src="verticalBanner" />
   </div>
 </template>
+
+<style scoped>
+.event-day-progress {
+  animation: event-day-glow 1.8s ease-in-out infinite;
+}
+
+.event-day-celebration {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6em;
+  color: #d97706;
+  font-size: clamp(1rem, 1.5vw, 1.75rem);
+  animation: event-day-pop 700ms cubic-bezier(0.2, 1.4, 0.4, 1) both;
+}
+
+.event-day-celebration span {
+  animation: event-day-sparkle 1.4s ease-in-out infinite alternate;
+}
+
+.event-day-celebration span:last-child {
+  animation-delay: 350ms;
+}
+
+@keyframes event-day-glow {
+  50% { filter: drop-shadow(0 0 16px rgb(245 158 11 / 55%)); }
+}
+
+@keyframes event-day-pop {
+  from { opacity: 0; transform: translateY(8px) scale(0.9); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes event-day-sparkle {
+  from { opacity: 0.5; transform: scale(0.75) rotate(-20deg); }
+  to { opacity: 1; transform: scale(1.2) rotate(20deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .event-day-progress,
+  .event-day-celebration,
+  .event-day-celebration span {
+    animation: none;
+  }
+}
+</style>

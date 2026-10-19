@@ -251,7 +251,12 @@ export async function saveSharedSettings(
   });
 
   if (!response.ok) {
-    throw new Error(`共有設定の保存に失敗しました (${response.status})`);
+    const body: unknown = await response.json().catch(() => null);
+    const detail =
+      typeof body === 'object' && body !== null && 'error' in body && typeof body.error === 'string'
+        ? `：${body.error}`
+        : '';
+    throw new Error(`共有設定の保存に失敗しました (HTTP ${response.status}${detail})`);
   }
 }
 
@@ -269,6 +274,11 @@ export async function saveSharedSettingsPolicy(
   });
 
   if (!response.ok) {
-    throw new Error(`反映対象の保存に失敗しました (${response.status})`);
+    const body: unknown = await response.json().catch(() => null);
+    const detail =
+      typeof body === 'object' && body !== null && 'error' in body && typeof body.error === 'string'
+        ? `：${body.error}`
+        : '';
+    throw new Error(`反映対象の保存に失敗しました (HTTP ${response.status}${detail})`);
   }
 }

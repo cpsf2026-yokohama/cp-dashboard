@@ -41,20 +41,40 @@ type PlaybackSchedule = {
 
 const API_BASE = useVideoApiBase()
 const activePlayback = ref<PlaybackSchedule | null>(null)
+const preparedPlayback = ref<PlaybackSchedule | null>(null)
 const playbackError = ref('')
 const playbackQueue: PlaybackSchedule[] = []
 const seenScheduleIds = new Set<string>()
 let schedulePollTimer: number | undefined
+let playbackStartTimer: number | undefined
+let schedulePollInFlight = false
 
-function playNextScheduledVideo() {
-  if (activePlayback.value || playbackQueue.length === 0) return
-
+function prepareNextScheduledVideo() {
+  if (activePlayback.value) return
+  if (playbackStartTimer !== undefined) {
+    window.clearTimeout(playbackStartTimer)
+    playbackStartTimer = undefined
+  }
   playbackQueue.sort((a, b) => a.startsAt.localeCompare(b.startsAt))
-  activePlayback.value = playbackQueue.shift() ?? null
-  playbackError.value = ''
+  preparedPlayback.value = playbackQueue[0] ?? null
+
+  const startsAt = preparedPlayback.value ? Date.parse(preparedPlayback.value.startsAt) : NaN
+  if (preparedPlayback.value && Number.isFinite(startsAt)) {
+    const scheduleId = preparedPlayback.value.scheduleId
+    const start = () => {
+      if (preparedPlayback.value?.scheduleId !== scheduleId) return
+      activePlayback.value = preparedPlayback.value
+      playbackQueue.shift()
+      playbackStartTimer = undefined
+      void nextTick(() => attemptScheduledPlayback())
+    }
+    if (startsAt <= Date.now()) start()
+    else playbackStartTimer = window.setTimeout(start, startsAt - Date.now())
+  }
 }
 
 async function attemptScheduledPlayback() {
+  if (!activePlayback.value) return
   const video = document.querySelector<HTMLVideoElement>('#scheduled-video')
   if (!video) return
 
@@ -67,17 +87,21 @@ async function attemptScheduledPlayback() {
   }
 }
 
+function failScheduledPlayback() {
+  if (activePlayback.value) {
+    playbackError.value = '動画を読み込めませんでした。Worker と動画ファイルを確認してください。'
+  }
+}
+
 function finishScheduledPlayback() {
   activePlayback.value = null
   playbackError.value = ''
-  playNextScheduledVideo()
-}
-
-function failScheduledPlayback() {
-  playbackError.value = '動画を読み込めませんでした。Worker と動画ファイルを確認してください。'
+  prepareNextScheduledVideo()
 }
 
 async function pollPlaybackSchedule() {
+  if (schedulePollInFlight) return
+  schedulePollInFlight = true
   try {
     const response = await fetch(`${API_BASE}/schedule`, { cache: 'no-store' })
     if (!response.ok) return
@@ -90,7 +114,6 @@ async function pollPlaybackSchedule() {
       const lateness = now - startsAt
       if (
         !Number.isFinite(startsAt)
-        || lateness < 0
         || lateness > 60_000
         || seenScheduleIds.has(item.scheduleId)
       ) {
@@ -101,9 +124,11 @@ async function pollPlaybackSchedule() {
       playbackQueue.push(item)
     }
 
-    playNextScheduledVideo()
+    prepareNextScheduledVideo()
   } catch (error) {
     console.warn('Failed to check playback schedule:', error)
+  } finally {
+    schedulePollInFlight = false
   }
 }
 
@@ -170,12 +195,14 @@ onMounted(async () => {
   void pollPlaybackSchedule();
   schedulePollTimer = window.setInterval(() => {
     void pollPlaybackSchedule();
-  }, 30_000);
+  }, 10_000);
 });
 
 onUnmounted(() => {
   if (schedulePollTimer !== undefined)
     window.clearInterval(schedulePollTimer);
+  if (playbackStartTimer !== undefined)
+    window.clearTimeout(playbackStartTimer);
 });
 </script>
 
@@ -242,16 +269,19 @@ onUnmounted(() => {
     </div>
   </NuxtLayout>
   <section
-    v-if="activePlayback"
-    class="fixed inset-0 z-[10000] flex h-[100dvh] w-screen items-center justify-center bg-black"
+    v-if="preparedPlayback"
+    :class="activePlayback
+      ? 'fixed inset-0 z-[10000] flex h-[100dvh] w-screen items-center justify-center bg-black'
+      : 'fixed -left-[10000px] top-0 h-px w-px overflow-hidden'"
+    :aria-hidden="!activePlayback"
     aria-label="予約動画を再生中"
   >
     <video
       id="scheduled-video"
-      :key="activePlayback.scheduleId"
+      :key="preparedPlayback.scheduleId"
       class="h-full w-full object-contain"
-      :src="`${API_BASE}/stream/videos/${encodeURIComponent(activePlayback.videoId)}/stream`"
-      autoplay
+      :src="`${API_BASE}/stream/videos/${encodeURIComponent(preparedPlayback.videoId)}/stream`"
+      preload="auto"
       playsinline
       disablepictureinpicture
       @canplay="attemptScheduledPlayback"

@@ -52,4 +52,24 @@
 
 本仕様の実装はローカル環境で確認済み。Workerテスト23件、Workerの型チェック、Nuxtの型チェックに成功。テスト用画像をローカルR2へ登録し、APIからの取得、管理画面プレビュー、サイト画面での表示を確認後、テスト画像を削除し、表示設定を元に戻した。
 
-本番環境にはデプロイしていない。公開環境で利用するには、WorkerとPagesをそれぞれデプロイし、Pagesの `VIDEO_API` Service Binding と本番R2バケットを設定する必要がある。
+2026-10-19に本番D1へマイグレーション `0003_shared_settings.sql`〜`0005_shared_settings_apply_policy.sql` を適用し、`video-api` Workerをデプロイした。Pagesの `VIDEO_API` Service Binding と本番R2バケットは既に接続されていた。
+
+本番確認では `GET /api/settings` と `GET /api/banners` がどちらもHTTP 200を返し、管理画面の「端末への反映」タブで設定値・反映対象・バナー一覧が読み込まれることを確認した。初期データはマイグレーションの標準値であり、ローカル環境の個別設定値をコピーしたものではない。Workerテストは23件成功。
+
+## 2026-10-19 設定保存401の修正
+
+### 原因
+
+Cloudflare Accessアプリの保護先には `/admin` と一部のAPIパスが登録されているが、`/api/settings` は登録されていなかった。設定の読み込み (`GET /api/settings`) は公開APIなので成功する一方、値の保存 (`PUT /api/settings`) はWorkerでAccess認証が必須のため、保護先パス外では `Cf-Access-Jwt-Assertion` ヘッダーが付かず、WorkerがHTTP 401 `Access authentication required` を返していた。権限や設定JSON、D1の保存処理は原因ではない。
+
+### 修正
+
+- Workerは従来どおり `Cf-Access-Jwt-Assertion` を優先して検証し、ヘッダーがないブラウザーリクエストに限って `CF_Authorization` Cookieを同じ署名・発行元・Audience・有効期限検証に通す。DBユーザーとロールの確認も維持する。
+- 公開の `GET /api/settings` と `GET /api/banners` をAccessアプリで保護しないまま、管理者の保存・更新操作を認証できる。
+- 管理画面はAPIエラー本文を表示し、401の理由を画面で確認できる。
+
+### 確認
+
+- Workerテスト24件成功。Cookieヘッダーからトークンを拾い、WorkerのJWT検証へ送ることを不正トークンで確認した。
+- 本番 `video-api` WorkerをVersion ID `c5cfa5f0-75a2-4636-9158-ed2b618af15d` で更新し、PagesのFunctionsを含むビルドを `https://c4fd9319.cp-dashboard-13x.pages.dev` として本番デプロイした。
+- 本番データを変更せずにログイン済みブラウザーから認証が通ること、および実保存の成功まではこの確認では未検証。

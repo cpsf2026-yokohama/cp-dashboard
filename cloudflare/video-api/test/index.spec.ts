@@ -77,14 +77,42 @@ describe("Video API worker", () => {
     });
   });
 
+  it("reads the Access cookie and validates its token", async () => {
+    const request = new IncomingRequest("http://example.com/api/settings", {
+      method: "PUT",
+      headers: { Cookie: "other=value; CF_Authorization=not.a.valid-token" },
+    });
+
+    const response = await worker.fetch(
+      request,
+      {
+        ...env,
+        ACCESS_TEAM_DOMAIN: "https://test.cloudflareaccess.com",
+        ACCESS_AUD: "test-audience",
+      },
+      createExecutionContext(),
+    );
+
+    // The cookie was found and sent through JWT validation. It was rejected as
+    // malformed rather than treated as a missing authentication token.
+    expect(response.status).toBe(401);
+    expect(await response.json()).toEqual({
+      error: "Invalid Access authentication",
+    });
+  });
+
   it("keeps scheduled playback polling public", async () => {
     const request = new IncomingRequest("http://example.com/api/schedule");
+    let scheduleWindow: unknown[] = []
 
     const playbackDb = {
       prepare: () => ({
-        bind: () => ({
-          all: async () => ({ results: [] }),
-        }),
+        bind: (...values: unknown[]) => {
+          scheduleWindow = values
+          return {
+            all: async () => ({ results: [] }),
+          }
+        },
       }),
     } as unknown as D1Database;
 
@@ -96,6 +124,9 @@ describe("Video API worker", () => {
 
     expect(response.status).toBe(200);
     expect(requiresAccessAuthentication("GET", "/api/schedule")).toBe(false);
+    const lookaheadMs = Date.parse(String(scheduleWindow[1])) - Date.now()
+    expect(lookaheadMs).toBeGreaterThan(4 * 60_000)
+    expect(lookaheadMs).toBeLessThanOrEqual(5 * 60_000)
   });
 
   it("keeps video streaming public while protecting the admin video list", async () => {

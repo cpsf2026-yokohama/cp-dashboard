@@ -195,6 +195,15 @@ function showNotice(message: string, isError = false) {
   noticeIsError.value = isError
 }
 
+async function apiResponseError(response: Response): Promise<Error> {
+  const body: unknown = await response.json().catch(() => null)
+  const detail =
+    typeof body === 'object' && body !== null && 'error' in body && typeof body.error === 'string'
+      ? body.error
+      : ''
+  return new Error(detail ? `HTTP ${response.status}：${detail}` : `HTTP ${response.status}`)
+}
+
 async function loadVideos() {
   videosLoading.value = true
   videosError.value = ''
@@ -283,7 +292,7 @@ async function saveSettingsValues() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ settings: sharedSettings.value, adminEdit: true }),
     })
-    if (!response.ok) throw new Error(`HTTP ${response.status}`)
+    if (!response.ok) throw await apiResponseError(response)
     showNotice('共有設定の値を保存しました。端末には次回の自動取得時に反映されます。')
   } catch (error) {
     console.error('Failed to save shared settings values:', error)

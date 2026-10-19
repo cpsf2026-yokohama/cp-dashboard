@@ -202,7 +202,18 @@ async function getAccessUser(request: Request, env: Env): Promise<{
     };
   }
 
-  const token = request.headers.get("cf-access-jwt-assertion");
+  // Access adds the assertion header when the request path is covered by an
+  // Access application. For browser routes intentionally left outside Access
+  // (public GET /api/settings paired with admin-only PUT), the same signed
+  // token is also sent in CF_Authorization. Verify it like the assertion;
+  // never trust the cookie without JWT validation.
+  const token = request.headers.get("cf-access-jwt-assertion") ??
+    request.headers.get("cookie")
+      ?.split(";")
+      .map(part => part.trim())
+      .find(part => part.startsWith("CF_Authorization="))
+      ?.slice("CF_Authorization=".length) ??
+    null;
   if (!token) {
     return {
       user: null,
@@ -729,7 +740,9 @@ export default {
         // Allow connected playback clients to recover from a short polling pause.
         const windowStart = new Date(now.getTime() - 60_000).toISOString();
 
-        const windowEnd = new Date(now.getTime() + 5_000).toISOString();
+        // Return a short preparation window so clients can warm the selected
+        // video's media buffer before the scheduled start time.
+        const windowEnd = new Date(now.getTime() + 5 * 60_000).toISOString();
 
         const result = await env.DB.prepare(`
 
