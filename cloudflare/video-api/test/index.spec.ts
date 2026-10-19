@@ -1033,4 +1033,34 @@ describe("Video API worker", () => {
       { summary: "横バナー: 変更前不明 → 有効", payload: { changes: { isBannerVisible: { beforeKnown: false, after: true } } } },
     ] });
   });
+
+  it("serves a pending banner preview only through the mentor request route", async () => {
+    const mentor = { id: "local-test-mentor", email: "mentor@example.invalid", role: "mentor" };
+    const imageBytes = new Uint8Array([137, 80, 78, 71]);
+    const db = {
+      prepare: (sql: string) => {
+        const statement = {
+          first: async () => sql.includes("FROM users") ? mentor : sql.includes("FROM change_requests")
+            ? { kind: "banner.upload", payloadJson: JSON.stringify({ kind: "horizontal", stagingKey: "pending/request-1", contentType: "image/png" }) }
+            : null,
+          bind: () => statement,
+        };
+        return statement;
+      },
+    } as unknown as D1Database;
+    const bucket = {
+      get: async (key: string) => key === "pending/request-1"
+        ? { body: new Response(imageBytes).body!, httpMetadata: { contentType: "image/png" } }
+        : null,
+    } as unknown as R2Bucket;
+    const response = await worker.fetch(
+      new IncomingRequest("http://127.0.0.1:8787/api/change-requests/request-1/preview"),
+      { ...env, DB: db, VIDEO_BUCKET: bucket, LOCAL_AUTH_BYPASS: "true", LOCAL_AUTH_BYPASS_ROLE: "mentor", ACCESS_TEAM_DOMAIN: "", ACCESS_AUD: "" },
+      createExecutionContext(),
+    );
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Content-Type")).toBe("image/png");
+    expect(response.headers.get("Cache-Control")).toBe("private, no-store");
+    expect([...new Uint8Array(await response.arrayBuffer())]).toEqual([...imageBytes]);
+  });
 });

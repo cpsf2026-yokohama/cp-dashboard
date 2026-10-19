@@ -91,6 +91,7 @@ let accessKeysCache: {
 export function requiresAccessAuthentication(method: string, pathname: string): boolean {
   return (
     (method === "GET" && pathname === "/api/change-requests") ||
+    (method === "GET" && /^\/api\/change-requests\/[^/]+\/preview$/.test(pathname)) ||
     (method === "POST" && /^\/api\/change-requests\/[^/]+\/(approve|reject)$/.test(pathname)) ||
     (method === "DELETE" && /^\/api\/change-requests\/[^/]+$/.test(pathname)) ||
     (method === "PUT" && pathname === "/api/settings") ||
@@ -106,6 +107,7 @@ export function requiresAccessAuthentication(method: string, pathname: string): 
 
 export function hasRoleForRoute(user: Pick<ApiUser, "role">, method: string, pathname: string): boolean {
   if (method === "GET" && pathname === "/api/change-requests") return user.role === "mentor";
+  if (method === "GET" && /^\/api\/change-requests\/[^/]+\/preview$/.test(pathname)) return user.role === "mentor";
   if (method === "POST" && /^\/api\/change-requests\/[^/]+\/(approve|reject)$/.test(pathname)) return user.role === "mentor";
   if (
     (method === "PUT" && pathname === "/api/settings") ||
@@ -518,6 +520,23 @@ export default {
         }
         return { ...row, isMine: row.requesterId === accessUser!.id || String(row.requesterEmail).toLowerCase() === accessUser!.email.toLowerCase(), summary, payloadJson: undefined, payload };
       }) });
+    } else if (request.method === "GET" && /^\/api\/change-requests\/[^/]+\/preview$/.test(url.pathname)) {
+      const id = decodeURIComponent(url.pathname.split("/")[3]);
+      const row = await env.DB.prepare("SELECT kind, payload_json AS payloadJson FROM change_requests WHERE id = ? AND status = 'pending'")
+        .bind(id).first<{ kind: string; payloadJson: string }>();
+      if (!row || row.kind !== "banner.upload") {
+        response = jsonError("Pending banner preview not found", 404);
+      } else {
+        const payload = JSON.parse(row.payloadJson) as Record<string, unknown>;
+        const stagingKey = typeof payload.stagingKey === "string" && payload.stagingKey.startsWith("pending/") ? payload.stagingKey : "";
+        const staged = stagingKey ? await env.VIDEO_BUCKET.get(stagingKey) : null;
+        if (!staged) response = jsonError("Pending banner image not found", 404);
+        else response = new Response(staged.body, { headers: {
+          "Content-Type": staged.httpMetadata?.contentType ?? String(payload.contentType ?? "application/octet-stream"),
+          "Cache-Control": "private, no-store",
+          "X-Content-Type-Options": "nosniff",
+        } });
+      }
     } else if (request.method === "DELETE" && /^\/api\/change-requests\/[^/]+$/.test(url.pathname)) {
       const id = decodeURIComponent(url.pathname.slice("/api/change-requests/".length));
       const row = await env.DB.prepare("SELECT cr.requester_id AS requesterId, u.email AS requesterEmail, cr.payload_json AS payloadJson FROM change_requests cr JOIN users u ON u.id = cr.requester_id WHERE cr.id = ? AND cr.status = 'pending'")

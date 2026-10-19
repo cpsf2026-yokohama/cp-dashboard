@@ -50,6 +50,20 @@ function formatDate(value: string) { return new Intl.DateTimeFormat('ja-JP', { d
 function kindLabel(kind: string) {
   return ({ settings: '共有設定', 'schedule.create': '予定の追加', 'schedule.delete': '予定の削除', 'video.delete': '動画の削除', 'video.upload': '動画の追加', 'banner.upload': 'バナー画像の変更', 'banner.delete': 'バナーの削除' } as Record<string, string>)[kind] ?? '変更リクエスト'
 }
+function bannerKind(item: ChangeRequest) {
+  const kind = item.payload.kind
+  return kind === 'horizontal' || kind === 'vertical' ? kind : null
+}
+function currentBannerUrl(item: ChangeRequest) {
+  const kind = bannerKind(item)
+  return kind ? `${api}/banners/${kind}` : ''
+}
+function pendingBannerUrl(item: ChangeRequest) {
+  return `${api}/change-requests/${encodeURIComponent(item.id)}/preview`
+}
+function hideUnavailableImage(event: Event) {
+  if (event.target instanceof HTMLImageElement) event.target.style.display = 'none'
+}
 function details(item: ChangeRequest) {
   const payload = item.payload
   const rows: Array<[string, string]> = []
@@ -92,6 +106,11 @@ onMounted(() => void loadRequests())
     <section v-else class="request-list" aria-label="承認待ち">
       <article v-for="item in requests" :key="item.id" class="request-card">
         <div class="request-header"><div><h2>{{ item.summary }}</h2><p>{{ item.requesterEmail }} · {{ formatDate(item.createdAt) }}</p></div><span>{{ kindLabel(item.kind) }}</span></div>
+        <div v-if="bannerKind(item) && (item.kind === 'banner.upload' || item.kind === 'banner.delete')" class="banner-comparison" aria-label="バナー画像の変更比較">
+          <figure><figcaption>現在</figcaption><img :src="currentBannerUrl(item)" :alt="`${bannerKind(item) === 'horizontal' ? '横' : '縦'}バナーの現在の画像`" @error="hideUnavailableImage"></figure>
+          <div class="change-arrow" aria-hidden="true">→</div>
+          <figure><figcaption>変更後</figcaption><img v-if="item.kind === 'banner.upload'" :src="pendingBannerUrl(item)" :alt="`${bannerKind(item) === 'horizontal' ? '横' : '縦'}バナーの申請画像`" @error="hideUnavailableImage"><p v-else class="image-result">画像なし（削除）</p></figure>
+        </div>
         <details v-if="details(item).length"><summary>申請内容</summary><dl><template v-for="([label, value], index) in details(item)" :key="`${label}-${index}`"><dt>{{ label }}</dt><dd>{{ value }}</dd></template></dl></details>
         <div class="actions"><template v-if="item.isMine"><button class="reject" :disabled="busyId !== ''" @click="void cancel(item)">{{ busyId === item.id ? '処理中...' : '自分の申請を取り消す' }}</button></template><template v-else><button class="reject" :disabled="busyId !== ''" @click="void decide(item, 'reject')">却下</button><button class="approve" :disabled="busyId !== ''" @click="void decide(item, 'approve')">{{ busyId === item.id ? '処理中...' : '承認して反映' }}</button></template></div>
       </article>
@@ -100,5 +119,5 @@ onMounted(() => void loadRequests())
 </template>
 
 <style scoped>
-.mentor-page{max-width:960px;margin:0 auto;padding:40px 24px 80px;color:#182230;font-family:system-ui,sans-serif}.mentor-page header{display:flex;align-items:flex-start;justify-content:space-between;gap:24px;margin-bottom:32px}.eyebrow{font-size:12px;letter-spacing:.12em;color:#64748b;font-weight:700}.mentor-page h1{margin:4px 0 8px;font-size:32px}.mentor-page header p{color:#64748b}.mentor-page nav{display:flex;gap:12px;align-items:center}.mentor-page button,.mentor-page a{border:1px solid #cbd5e1;border-radius:8px;padding:9px 14px;background:#fff;color:inherit;text-decoration:none;font:inherit;cursor:pointer}.request-list{display:grid;gap:16px}.request-card{border:1px solid #dbe2ea;border-radius:14px;padding:20px;background:#fff;box-shadow:0 3px 10px #0f172a0a}.request-header{display:flex;justify-content:space-between;gap:16px}.request-header h2{font-size:19px;margin:0 0 6px}.request-header p,.request-header span{font-size:13px;color:#64748b}.request-header span{background:#f1f5f9;padding:4px 8px;border-radius:99px;height:max-content}.request-card details{margin:18px 0;color:#475569}.request-card dl{display:grid;grid-template-columns:max-content 1fr;gap:6px 16px;margin:12px 0 0;padding:14px;background:#f8fafc;border-radius:8px;font-size:14px}.request-card dt{font-weight:600}.request-card dd{margin:0}.actions{display:flex;justify-content:flex-end;gap:10px}.actions .approve{background:#166534;color:white;border-color:#166534}.actions .reject{color:#b91c1c}.mentor-page button:disabled{opacity:.5;cursor:wait}.empty{padding:40px;text-align:center;color:#64748b;background:#f8fafc;border-radius:12px}.error{padding:12px;background:#fee2e2;color:#991b1b;border-radius:8px}@media(max-width:600px){.mentor-page header{display:block}.mentor-page nav{margin-top:18px}}
+.mentor-page{max-width:960px;margin:0 auto;padding:40px 24px 80px;color:#182230;font-family:system-ui,sans-serif}.mentor-page header{display:flex;align-items:flex-start;justify-content:space-between;gap:24px;margin-bottom:32px}.eyebrow{font-size:12px;letter-spacing:.12em;color:#64748b;font-weight:700}.mentor-page h1{margin:4px 0 8px;font-size:32px}.mentor-page header p{color:#64748b}.mentor-page nav{display:flex;gap:12px;align-items:center}.mentor-page button,.mentor-page a{border:1px solid #cbd5e1;border-radius:8px;padding:9px 14px;background:#fff;color:inherit;text-decoration:none;font:inherit;cursor:pointer}.request-list{display:grid;gap:16px}.request-card{border:1px solid #dbe2ea;border-radius:14px;padding:20px;background:#fff;box-shadow:0 3px 10px #0f172a0a}.request-header{display:flex;justify-content:space-between;gap:16px}.request-header h2{font-size:19px;margin:0 0 6px}.request-header p,.request-header span{font-size:13px;color:#64748b}.request-header span{background:#f1f5f9;padding:4px 8px;border-radius:99px;height:max-content}.banner-comparison{display:grid;grid-template-columns:minmax(0,1fr) 32px minmax(0,1fr);align-items:center;gap:12px;margin-top:18px}.banner-comparison figure{margin:0;min-width:0}.banner-comparison figcaption{margin-bottom:7px;font-size:13px;font-weight:650;color:#475569}.banner-comparison img{display:block;width:100%;height:180px;object-fit:contain;background:repeating-conic-gradient(#f1f5f9 0% 25%,#fff 0% 50%) 50%/20px 20px;border:1px solid #dbe2ea;border-radius:8px}.change-arrow{text-align:center;color:#64748b;font-size:24px}.image-result{display:grid;place-items:center;height:180px;margin:0;border:1px dashed #cbd5e1;border-radius:8px;background:#f8fafc;color:#64748b}.request-card details{margin:18px 0;color:#475569}.request-card dl{display:grid;grid-template-columns:max-content 1fr;gap:6px 16px;margin:12px 0 0;padding:14px;background:#f8fafc;border-radius:8px;font-size:14px}.request-card dt{font-weight:600}.request-card dd{margin:0}.actions{display:flex;justify-content:flex-end;gap:10px}.actions .approve{background:#166534;color:white;border-color:#166534}.actions .reject{color:#b91c1c}.mentor-page button:disabled{opacity:.5;cursor:wait}.empty{padding:40px;text-align:center;color:#64748b;background:#f8fafc;border-radius:12px}.error{padding:12px;background:#fee2e2;color:#991b1b;border-radius:8px}@media(max-width:600px){.mentor-page header{display:block}.mentor-page nav{margin-top:18px}.banner-comparison{grid-template-columns:minmax(0,1fr) 24px minmax(0,1fr);gap:6px}.banner-comparison img,.image-result{height:130px}}
 </style>
