@@ -45,9 +45,6 @@ function details(item: ChangeRequest) {
     for (const [key, value] of Object.entries(payload.changes as Record<string, { before?: unknown; after?: unknown }>)) {
       if (key in labels) rows.push([labels[key], `${valueText(value.before)} → ${valueText(value.after)}`])
     }
-  } else if (payload.settings && typeof payload.settings === 'object') {
-    // Older pending requests do not have the before value; label their value as the requested result.
-    for (const [key, value] of Object.entries(payload.settings as Record<string, unknown>)) if (key in labels) rows.push([`${labels[key]}（変更後）`, valueText(value)])
   }
   if (payload.applyChanges && typeof payload.applyChanges === 'object') {
     for (const [key, value] of Object.entries(payload.applyChanges as Record<string, { before?: boolean; after?: boolean }>)) {

@@ -481,7 +481,33 @@ export default {
 
     } else if (request.method === "GET" && url.pathname === "/api/change-requests") {
       const result = await env.DB.prepare(`SELECT cr.id, cr.kind, cr.summary, cr.payload_json AS payloadJson, cr.requester_id AS requesterId, u.email AS requesterEmail, cr.created_at AS createdAt FROM change_requests cr JOIN users u ON u.id = cr.requester_id WHERE cr.status = 'pending' ORDER BY cr.created_at ASC`).all();
-      response = Response.json({ requests: result.results.map((row) => ({ ...row, payloadJson: undefined, payload: JSON.parse(String(row.payloadJson)) })) });
+      const settingsRow = await env.DB.prepare("SELECT settings_json AS settingsJson, apply_json AS applyJson FROM shared_settings WHERE id = 1")
+        .first<{ settingsJson: string; applyJson: string }>();
+      const currentSettings = settingsRow ? JSON.parse(settingsRow.settingsJson) as Record<string, unknown> : {};
+      let currentApply = defaultSharedSettingsApply;
+      try { if (settingsRow) currentApply = parseSharedSettingsApply(JSON.parse(settingsRow.applyJson)) ?? defaultSharedSettingsApply; } catch { /* use defaults */ }
+      const labels: Record<string, string> = { countdownDates: "カウントダウン予定", yearlyCountdownDates: "毎年の予定", userChimeTimes: "チャイム時刻", isChimeEnabled: "チャイム", isPreChimeEnabled: "予鈴", isBannerVisible: "横バナー", isVerticalBanner: "縦バナー" };
+      const valueText = (value: unknown) => typeof value === "boolean" ? (value ? "有効" : "無効") : Array.isArray(value) ? `${value.length}件` : value === undefined ? "未設定" : "変更あり";
+      response = Response.json({ requests: result.results.map((row) => {
+        const payload = JSON.parse(String(row.payloadJson)) as Record<string, unknown>;
+        let summary = String(row.summary);
+        if (row.kind === "settings" && !payload.changes) {
+          const requested = (payload.settings ?? {}) as Record<string, unknown>;
+          const changes: Record<string, { before: unknown; after: unknown }> = {};
+          const applyChanges: Record<string, { before: boolean; after: boolean }> = {};
+          for (const key of sharedSettingKeys) {
+            if (key in requested && JSON.stringify(currentSettings[key]) !== JSON.stringify(requested[key])) changes[key] = { before: currentSettings[key], after: requested[key] };
+          }
+          const requestedApply = (payload.apply as SharedSettingsApply | undefined) ?? currentApply;
+          for (const key of sharedSettingKeys) if (requestedApply[key] !== currentApply[key]) applyChanges[key] = { before: currentApply[key], after: requestedApply[key] };
+          payload.changes = changes;
+          payload.applyChanges = applyChanges;
+          const descriptions = Object.entries(changes).map(([key, value]) => `${labels[key]}: ${valueText(value.before)} → ${valueText(value.after)}`);
+          for (const [key, value] of Object.entries(applyChanges)) descriptions.push(`${labels[key]}のサイト反映: ${value.before ? "有効" : "無効"} → ${value.after ? "有効" : "無効"}`);
+          if (descriptions.length) summary = descriptions.join("・");
+        }
+        return { ...row, summary, payloadJson: undefined, payload };
+      }) });
     } else if (request.method === "POST" && /^\/api\/change-requests\/[^/]+\/(approve|reject)$/.test(url.pathname)) {
       const [, idPart, decision] = /^\/api\/change-requests\/([^/]+)\/(approve|reject)$/.exec(url.pathname)!;
       const id = decodeURIComponent(idPart);

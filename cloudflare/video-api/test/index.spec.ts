@@ -982,4 +982,26 @@ describe("Video API worker", () => {
     expect(changes[0].values[3]).toContain("横バナー: 有効 → 無効");
     expect(JSON.parse(String(changes[0].values[4])).changes).toEqual({ isBannerVisible: { before: true, after: false } });
   });
+
+  it("shows a before and after comparison for older pending setting requests", async () => {
+    const mentor = { id: "local-test-mentor", email: "mentor@example.invalid", role: "mentor" };
+    const pending = { id: "old-request", kind: "settings", summary: "共有設定を変更", payloadJson: JSON.stringify({ settings: { isBannerVisible: false } }), requesterId: "requester", requesterEmail: "requester@example.invalid", createdAt: "2030-01-01 00:00:00" };
+    const db = {
+      prepare: (sql: string) => {
+        const statement = {
+          first: async () => sql.includes("FROM users") ? mentor : sql.includes("FROM shared_settings") ? { settingsJson: JSON.stringify({ isBannerVisible: true }), applyJson: "{}" } : null,
+          all: async () => ({ results: [pending] }),
+          bind: () => statement,
+        };
+        return statement;
+      },
+    } as unknown as D1Database;
+    const response = await worker.fetch(
+      new IncomingRequest("http://127.0.0.1:8787/api/change-requests"),
+      { ...env, DB: db, LOCAL_AUTH_BYPASS: "true", LOCAL_AUTH_BYPASS_ROLE: "mentor", ACCESS_TEAM_DOMAIN: "", ACCESS_AUD: "" },
+      createExecutionContext(),
+    );
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ requests: [{ summary: "横バナー: 有効 → 無効", payload: { changes: { isBannerVisible: { before: true, after: false } } } }] });
+  });
 });
