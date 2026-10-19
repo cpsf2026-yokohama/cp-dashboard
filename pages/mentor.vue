@@ -39,17 +39,24 @@ function kindLabel(kind: string) {
 function details(item: ChangeRequest) {
   const payload = item.payload
   const rows: Array<[string, string]> = []
+  const labels: Record<string, string> = { isBannerVisible: '横バナー', isVerticalBanner: '縦バナー', isChimeEnabled: 'チャイム', isPreChimeEnabled: '予鈴', countdownDates: 'カウントダウン予定', yearlyCountdownDates: '毎年の予定', userChimeTimes: 'チャイム時刻' }
+  const valueText = (value: unknown) => typeof value === 'boolean' ? (value ? '有効' : '無効') : Array.isArray(value) ? `${value.length}件` : value === undefined ? '未設定' : '変更あり'
+  if (payload.changes && typeof payload.changes === 'object') {
+    for (const [key, value] of Object.entries(payload.changes as Record<string, { before?: unknown; after?: unknown }>)) {
+      if (key in labels) rows.push([labels[key], `${valueText(value.before)} → ${valueText(value.after)}`])
+    }
+  } else if (payload.settings && typeof payload.settings === 'object') {
+    // Older pending requests do not have the before value; label their value as the requested result.
+    for (const [key, value] of Object.entries(payload.settings as Record<string, unknown>)) if (key in labels) rows.push([`${labels[key]}（変更後）`, valueText(value)])
+  }
+  if (payload.applyChanges && typeof payload.applyChanges === 'object') {
+    for (const [key, value] of Object.entries(payload.applyChanges as Record<string, { before?: boolean; after?: boolean }>)) {
+      if (key in labels) rows.push([`${labels[key]}のサイト反映`, `${value.before ? '有効' : '無効'} → ${value.after ? '有効' : '無効'}`])
+    }
+  }
   if (typeof payload.videoTitle === 'string' || typeof payload.title === 'string') rows.push(['動画', String(payload.videoTitle ?? payload.title)])
   if (typeof payload.startsAt === 'string') rows.push(['予定時刻', formatDate(payload.startsAt)])
   if (typeof payload.kind === 'string') rows.push(['バナー', payload.kind === 'horizontal' ? '横バナー' : '縦バナー'])
-  if (payload.settings && typeof payload.settings === 'object') {
-    const labels: Record<string, string> = { isBannerVisible: '横バナー', isVerticalBanner: '縦バナー', isChimeEnabled: 'チャイム', isPreChimeEnabled: '予鈴', countdownDates: 'カウントダウン予定', yearlyCountdownDates: '毎年の予定', userChimeTimes: 'チャイム時刻' }
-    for (const [key, value] of Object.entries(payload.settings as Record<string, unknown>)) if (key in labels) rows.push([labels[key], typeof value === 'boolean' ? (value ? '有効' : '無効') : Array.isArray(value) ? `${value.length}件` : '更新'])
-  }
-  if (payload.apply && typeof payload.apply === 'object') {
-    const labels: Record<string, string> = { isBannerVisible: '横バナー', isVerticalBanner: '縦バナー', isChimeEnabled: 'チャイム', isPreChimeEnabled: '予鈴', countdownDates: 'カウントダウン予定', yearlyCountdownDates: '毎年の予定', userChimeTimes: 'チャイム時刻' }
-    for (const [key, value] of Object.entries(payload.apply as Record<string, unknown>)) if (key in labels) rows.push([`${labels[key]}のサイト反映`, value ? '有効' : '無効'])
-  }
   return rows
 }
 onMounted(() => void loadRequests())

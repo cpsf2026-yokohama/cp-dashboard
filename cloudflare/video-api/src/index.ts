@@ -527,18 +527,28 @@ export default {
             isChimeEnabled: "チャイム", isPreChimeEnabled: "予鈴", isBannerVisible: "横バナー", isVerticalBanner: "縦バナー",
           };
           const settings = (body.settings ?? {}) as Record<string, unknown>;
-          const changes = Object.keys(settings).filter(key => sharedSettingKeys.includes(key as typeof sharedSettingKeys[number]));
-          const descriptions = changes.map(key => {
-            if (key === "isBannerVisible" || key === "isVerticalBanner" || key === "isChimeEnabled" || key === "isPreChimeEnabled") {
-              return `${labels[key]}を${settings[key] === false ? "無効化" : "有効化"}`;
-            }
-            return `${labels[key] ?? key}を更新`;
-          });
-          if (body.apply && typeof body.apply === "object") {
-            for (const key of sharedSettingKeys) if ((body.apply as Record<string, unknown>)[key] === false) descriptions.push(`${labels[key]}をサイトに反映しない`);
+          const stored = await env.DB.prepare("SELECT settings_json AS settingsJson, apply_json AS applyJson FROM shared_settings WHERE id = 1")
+            .first<{ settingsJson: string; applyJson: string }>();
+          if (!stored) throw new Error("Shared settings not found");
+          const beforeSettings = JSON.parse(stored.settingsJson) as Record<string, unknown>;
+          let beforeApply = defaultSharedSettingsApply;
+          try { beforeApply = parseSharedSettingsApply(JSON.parse(stored.applyJson)) ?? defaultSharedSettingsApply; } catch { /* use defaults */ }
+          const afterApply = (body.apply as SharedSettingsApply | undefined) ?? beforeApply;
+          const changes: Record<string, { before: unknown; after: unknown }> = {};
+          const applyChanges: Record<string, { before: boolean; after: boolean }> = {};
+          for (const key of sharedSettingKeys) {
+            if (key in settings && JSON.stringify(beforeSettings[key]) !== JSON.stringify(settings[key])) changes[key] = { before: beforeSettings[key], after: settings[key] };
+            if (afterApply[key] !== beforeApply[key]) applyChanges[key] = { before: beforeApply[key], after: afterApply[key] };
           }
+          const describeValue = (key: string, value: unknown) => {
+            if (typeof value === "boolean") return value ? "有効" : "無効";
+            if (Array.isArray(value)) return `${value.length}件`;
+            return value === undefined ? "未設定" : "変更あり";
+          };
+          const descriptions = Object.entries(changes).map(([key, change]) => `${labels[key] ?? key}: ${describeValue(key, change.before)} → ${describeValue(key, change.after)}`);
+          for (const [key, change] of Object.entries(applyChanges)) descriptions.push(`${labels[key]}のサイト反映: ${change.before ? "有効" : "無効"} → ${change.after ? "有効" : "無効"}`);
           summary = descriptions.length ? descriptions.join("・") : "共有設定を変更";
-          payload = { settings, apply: body.apply, adminEdit: body.adminEdit === true };
+          payload = { settings, apply: body.apply, changes, applyChanges, adminEdit: body.adminEdit === true };
         } else if (bannerKind && request.method === "DELETE") {
           kind = "banner.delete"; summary = `${bannerKind === "horizontal" ? "横" : "縦"}型バナーを削除`; payload = { kind: bannerKind };
         } else if (bannerKind && request.method === "PUT") {

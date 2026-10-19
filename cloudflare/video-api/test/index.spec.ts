@@ -953,4 +953,33 @@ describe("Video API worker", () => {
       error: "Access authentication required",
     });
   });
+
+  it("records before and after values for shared setting requests", async () => {
+    const changes: Array<{ sql: string; values: unknown[] }> = [];
+    const admin = { id: "local-test-admin", email: "local-test-admin@example.invalid", role: "admin" };
+    const currentSettings = { isBannerVisible: true, isChimeEnabled: true };
+    const currentApply = { countdownDates: true, yearlyCountdownDates: true, userChimeTimes: true, isChimeEnabled: true, isPreChimeEnabled: true, isBannerVisible: true, isVerticalBanner: true };
+    const db = {
+      prepare: (sql: string) => {
+        const statement = {
+          first: async () => sql.includes("FROM users") ? admin : sql.includes("FROM shared_settings") ? { settingsJson: JSON.stringify(currentSettings), applyJson: JSON.stringify(currentApply) } : null,
+          run: async (...values: unknown[]) => { if (sql.includes("INSERT INTO change_requests")) changes.push({ sql, values }); return { success: true, meta: { changes: 1 } }; },
+          bind: (...values: unknown[]) => ({
+            first: statement.first,
+            run: async () => { if (sql.includes("INSERT INTO change_requests")) changes.push({ sql, values }); return { success: true, meta: { changes: 1 } }; },
+          }),
+        };
+        return statement;
+      },
+    } as unknown as D1Database;
+    const response = await worker.fetch(
+      new IncomingRequest("http://127.0.0.1:8787/api/settings", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ settings: { isBannerVisible: false } }) }),
+      { ...env, DB: db, LOCAL_AUTH_BYPASS: "true", ACCESS_TEAM_DOMAIN: "", ACCESS_AUD: "" },
+      createExecutionContext(),
+    );
+    expect(response.status, JSON.stringify(await response.clone().json())).toBe(202);
+    expect(changes).toHaveLength(1);
+    expect(changes[0].values[3]).toContain("横バナー: 有効 → 無効");
+    expect(JSON.parse(String(changes[0].values[4])).changes).toEqual({ isBannerVisible: { before: true, after: false } });
+  });
 });
