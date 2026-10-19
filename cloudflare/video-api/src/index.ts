@@ -92,6 +92,7 @@ export function requiresAccessAuthentication(method: string, pathname: string): 
   return (
     (method === "GET" && pathname === "/api/change-requests") ||
     (method === "POST" && /^\/api\/change-requests\/[^/]+\/(approve|reject)$/.test(pathname)) ||
+    (method === "DELETE" && /^\/api\/change-requests\/[^/]+$/.test(pathname)) ||
     (method === "PUT" && pathname === "/api/settings") ||
     ((method === "PUT" || method === "DELETE") && /^\/api\/banners\/(horizontal|vertical)$/.test(pathname)) ||
     (method === "GET" &&
@@ -491,7 +492,7 @@ export default {
       response = Response.json({ requests: result.results.map((row) => {
         const payload = JSON.parse(String(row.payloadJson)) as Record<string, unknown>;
         let summary = String(row.summary);
-        if (row.kind === "settings" && !payload.changes) {
+      if (row.kind === "settings" && (!payload.changes || Object.keys(payload.changes as object).length === 0)) {
           const requested = (payload.settings ?? {}) as Record<string, unknown>;
           const changes: Record<string, { before: unknown; after: unknown }> = {};
           const applyChanges: Record<string, { before: boolean; after: boolean }> = {};
@@ -506,8 +507,24 @@ export default {
           for (const [key, value] of Object.entries(applyChanges)) descriptions.push(`${labels[key]}のサイト反映: ${value.before ? "有効" : "無効"} → ${value.after ? "有効" : "無効"}`);
           if (descriptions.length) summary = descriptions.join("・");
         }
-        return { ...row, summary, payloadJson: undefined, payload };
+        return { ...row, isMine: row.requesterId === accessUser!.id, summary, payloadJson: undefined, payload };
       }) });
+    } else if (request.method === "DELETE" && /^\/api\/change-requests\/[^/]+$/.test(url.pathname)) {
+      const id = decodeURIComponent(url.pathname.slice("/api/change-requests/".length));
+      const row = await env.DB.prepare("SELECT requester_id AS requesterId, payload_json AS payloadJson FROM change_requests WHERE id = ? AND status = 'pending'")
+        .bind(id).first<{ requesterId: string; payloadJson: string }>();
+      if (!row || row.requesterId !== accessUser!.id) {
+        response = jsonError("Pending request not found", 404);
+      } else {
+        const deleted = await env.DB.prepare("DELETE FROM change_requests WHERE id = ? AND requester_id = ? AND status = 'pending'")
+          .bind(id, accessUser!.id).run();
+        if (deleted.meta.changes === 0) response = jsonError("Request is already being reviewed", 409);
+        else {
+          const payload = JSON.parse(row.payloadJson) as Record<string, unknown>;
+          if (typeof payload.stagingKey === "string") await env.VIDEO_BUCKET.delete(payload.stagingKey).catch(error => console.error("Failed to clean up cancelled request file:", error));
+          response = Response.json({ success: true, status: "cancelled" });
+        }
+      }
     } else if (request.method === "POST" && /^\/api\/change-requests\/[^/]+\/(approve|reject)$/.test(url.pathname)) {
       const [, idPart, decision] = /^\/api\/change-requests\/([^/]+)\/(approve|reject)$/.exec(url.pathname)!;
       const id = decodeURIComponent(idPart);

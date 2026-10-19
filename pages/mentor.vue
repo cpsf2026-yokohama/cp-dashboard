@@ -1,5 +1,5 @@
 <script setup lang="ts">
-type ChangeRequest = { id: string; kind: string; summary: string; payload: Record<string, unknown>; requesterEmail: string; createdAt: string }
+type ChangeRequest = { id: string; kind: string; summary: string; payload: Record<string, unknown>; requesterEmail: string; createdAt: string; isMine: boolean }
 const api = useVideoApiBase()
 const requests = ref<ChangeRequest[]>([])
 const loading = ref(true)
@@ -32,6 +32,20 @@ async function decide(item: ChangeRequest, action: 'approve' | 'reject') {
   finally { busyId.value = '' }
 }
 
+async function cancel(item: ChangeRequest) {
+  if (!window.confirm(`「${item.summary}」の申請を取り消しますか？`)) return
+  busyId.value = item.id; error.value = ''
+  try {
+    const response = await fetch(`${api}/change-requests/${encodeURIComponent(item.id)}`, { method: 'DELETE' })
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({})) as { error?: string }
+      throw new Error(body.error || `HTTP ${response.status}`)
+    }
+    await loadRequests()
+  } catch (cause) { error.value = cause instanceof Error ? cause.message : '申請を取り消せませんでした。' }
+  finally { busyId.value = '' }
+}
+
 function formatDate(value: string) { return new Intl.DateTimeFormat('ja-JP', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value.includes('T') ? value : `${value.replace(' ', 'T')}Z`)) }
 function kindLabel(kind: string) {
   return ({ settings: '共有設定', 'schedule.create': '予定の追加', 'schedule.delete': '予定の削除', 'video.delete': '動画の削除', 'video.upload': '動画の追加', 'banner.upload': 'バナー画像の変更', 'banner.delete': 'バナーの削除' } as Record<string, string>)[kind] ?? '変更リクエスト'
@@ -54,6 +68,7 @@ function details(item: ChangeRequest) {
   if (typeof payload.videoTitle === 'string' || typeof payload.title === 'string') rows.push(['動画', String(payload.videoTitle ?? payload.title)])
   if (typeof payload.startsAt === 'string') rows.push(['予定時刻', formatDate(payload.startsAt)])
   if (typeof payload.kind === 'string') rows.push(['バナー', payload.kind === 'horizontal' ? '横バナー' : '縦バナー'])
+  if (item.kind === 'settings' && rows.length === 0) rows.push(['差分', '現在の設定との差分はありません（先に反映された可能性があります）'])
   return rows
 }
 onMounted(() => void loadRequests())
@@ -69,7 +84,7 @@ onMounted(() => void loadRequests())
       <article v-for="item in requests" :key="item.id" class="request-card">
         <div class="request-header"><div><h2>{{ item.summary }}</h2><p>{{ item.requesterEmail }} · {{ formatDate(item.createdAt) }}</p></div><span>{{ kindLabel(item.kind) }}</span></div>
         <details v-if="details(item).length"><summary>申請内容</summary><dl><template v-for="([label, value], index) in details(item)" :key="`${label}-${index}`"><dt>{{ label }}</dt><dd>{{ value }}</dd></template></dl></details>
-        <div class="actions"><button class="reject" :disabled="busyId !== ''" @click="void decide(item, 'reject')">却下</button><button class="approve" :disabled="busyId !== ''" @click="void decide(item, 'approve')">{{ busyId === item.id ? '処理中...' : '承認して反映' }}</button></div>
+        <div class="actions"><template v-if="item.isMine"><button class="reject" :disabled="busyId !== ''" @click="void cancel(item)">{{ busyId === item.id ? '処理中...' : '自分の申請を取り消す' }}</button></template><template v-else><button class="reject" :disabled="busyId !== ''" @click="void decide(item, 'reject')">却下</button><button class="approve" :disabled="busyId !== ''" @click="void decide(item, 'approve')">{{ busyId === item.id ? '処理中...' : '承認して反映' }}</button></template></div>
       </article>
     </section>
   </main>

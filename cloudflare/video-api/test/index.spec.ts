@@ -363,6 +363,31 @@ describe("Video API worker", () => {
     expect(reviewUpdates.some(sql => sql.includes("SET status = ?"))).toBe(true);
   });
 
+  it("lets the requester cancel their own pending request", async () => {
+    const statements: string[] = [];
+    const requesterId = "local-test-admin";
+    const db = {
+      prepare: (sql: string) => {
+        const statement = {
+          bind: (..._values: unknown[]) => statement,
+          first: async () => sql.includes("FROM users")
+            ? { id: requesterId, email: "mentor@example.invalid", role: "mentor" }
+            : sql.includes("FROM change_requests") ? { requesterId, payloadJson: JSON.stringify({ kind: "horizontal" }) } : null,
+          run: async () => { statements.push(sql); return { success: true, meta: { changes: 1 } }; },
+        };
+        return statement;
+      },
+    } as unknown as D1Database;
+    const response = await worker.fetch(
+      new IncomingRequest("http://127.0.0.1:8787/api/change-requests/request-1", { method: "DELETE" }),
+      { ...env, DB: db, LOCAL_AUTH_BYPASS: "true", LOCAL_AUTH_BYPASS_ROLE: "mentor", ACCESS_TEAM_DOMAIN: "", ACCESS_AUD: "" },
+      createExecutionContext(),
+    );
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ success: true, status: "cancelled" });
+    expect(statements.some(sql => sql.startsWith("DELETE FROM change_requests"))).toBe(true);
+  });
+
   it("queues a schedule change without applying it before mentor approval", async () => {
     const auditRows: Array<{ sql: string; values: unknown[] }> = [];
     const changeRows: Array<{ sql: string; values: unknown[] }> = [];
