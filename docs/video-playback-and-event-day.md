@@ -24,4 +24,5 @@
 - Workerテスト24件成功。予定APIが約5分先まで返すことをテスト。
 - WorkerのTypeScript型チェック成功。
 - `corepack yarn build` と `corepack yarn generate` 成功。
-- 5分の予定先読みAPIは前回のpushに含まれている。今回の完全ダウンロードと再生待機の修正はローカル作業ツリーにあり、Pagesのデプロイは未実施。
+- Pagesはcommit `db07a63` として本番へ自動反映済み。WorkerはVersion ID `2fd71b29-e86f-4c5c-8d62-7bf7b34beea6` で更新済み。
+- 本番 `GET /api/schedule` はHTTP 200で応答したが、確認時点で予約が0件だったため、実動画の先行取得・再生の連続性は実地確認できていない。
