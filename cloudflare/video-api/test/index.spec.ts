@@ -326,6 +326,43 @@ describe("Video API worker", () => {
     expect(executed.some(({ sql }) => sql.includes("SET status = 'processing'"))).toBe(true);
   });
 
+  it("lets a mentor reject their own request but still blocks self-approval", async () => {
+    const reviewUpdates: string[] = [];
+    const db = {
+      prepare: (sql: string) => {
+        const statement = {
+          bind: (..._values: unknown[]) => statement,
+          first: async () => sql.includes("FROM users")
+            ? { id: "local-test-admin", email: "mentor@example.invalid", role: "mentor" }
+            : sql.includes("FROM change_requests")
+              ? { id: "request-1", requesterId: "local-test-admin", kind: "settings", payloadJson: "{}", status: "pending" }
+              : null,
+          run: async () => { reviewUpdates.push(sql); return { success: true, meta: { changes: 1 } }; },
+        };
+        return statement;
+      },
+    } as unknown as D1Database;
+    const localEnv = { ...env, DB: db, LOCAL_AUTH_BYPASS: "true", LOCAL_AUTH_BYPASS_ROLE: "mentor", ACCESS_TEAM_DOMAIN: "", ACCESS_AUD: "" };
+    const approve = await worker.fetch(
+      new IncomingRequest("http://127.0.0.1:8787/api/change-requests/request-1/approve", { method: "POST" }),
+      localEnv,
+      createExecutionContext(),
+    );
+    expect(approve.status).toBe(409);
+    expect(await approve.json()).toEqual({ error: "Mentors cannot approve their own requests" });
+    expect(reviewUpdates).toHaveLength(0);
+
+    const reject = await worker.fetch(
+      new IncomingRequest("http://127.0.0.1:8787/api/change-requests/request-1/reject", { method: "POST" }),
+      localEnv,
+      createExecutionContext(),
+    );
+    expect(reject.status).toBe(200);
+    expect(await reject.json()).toEqual({ success: true, status: "rejected" });
+    expect(reviewUpdates.some(sql => sql.includes("SET status = 'processing'"))).toBe(true);
+    expect(reviewUpdates.some(sql => sql.includes("SET status = ?"))).toBe(true);
+  });
+
   it("queues a schedule change without applying it before mentor approval", async () => {
     const auditRows: Array<{ sql: string; values: unknown[] }> = [];
     const changeRows: Array<{ sql: string; values: unknown[] }> = [];

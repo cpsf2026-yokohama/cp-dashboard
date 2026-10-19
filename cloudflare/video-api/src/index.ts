@@ -488,7 +488,7 @@ export default {
       const row = await env.DB.prepare("SELECT id, requester_id AS requesterId, kind, payload_json AS payloadJson, status FROM change_requests WHERE id = ?").bind(id)
         .first<{ id: string; requesterId: string; kind: string; payloadJson: string; status: string }>();
       if (!row || row.status !== "pending") response = jsonError("Request not found or already reviewed", 404);
-      else if (row.requesterId === accessUser!.id) response = jsonError("Mentors cannot review their own requests", 409);
+      else if (decision === "approve" && row.requesterId === accessUser!.id) response = jsonError("Mentors cannot approve their own requests", 409);
       else {
         try {
           const claim = await env.DB.prepare("UPDATE change_requests SET status = 'processing' WHERE id = ? AND status = 'pending'").bind(id).run();
