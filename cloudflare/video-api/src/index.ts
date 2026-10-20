@@ -1051,8 +1051,7 @@ export default {
         // Allow connected playback clients to recover from a short polling pause.
         const windowStart = new Date(now.getTime() - 60_000).toISOString();
 
-        // Return a short preparation window so clients can warm the selected
-        // video's media buffer before the scheduled start time.
+        // Return nearby schedules so clients can start playback at the scheduled time.
         const windowEnd = new Date(now.getTime() + 5 * 60_000).toISOString();
 
         const result = await env.DB.prepare(`

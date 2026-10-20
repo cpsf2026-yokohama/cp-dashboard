@@ -1,6 +1,4 @@
 <script setup lang="ts">
-import { loadScheduledVideoBlob } from '~/utils/scheduled-video-cache.client'
-
 useSeoMeta({
   title: 'Campus Dashboard | 多機能デジタル時計',
   ogTitle: 'Campus Dashboard | 多機能デジタル時計',
@@ -47,38 +45,14 @@ const preparedPlayback = ref<PlaybackSchedule | null>(null)
 const preparedVideoUrl = ref('')
 const playbackError = ref('')
 const playbackStalled = ref(false)
-const playbackDue = ref(false)
-const preparedMediaReady = ref(false)
-const usingRemoteFallback = ref(false)
 const playbackQueue: PlaybackSchedule[] = []
 const seenScheduleIds = new Set<string>()
 let schedulePollTimer: number | undefined
 let playbackStartTimer: number | undefined
 let schedulePollInFlight = false
-let preparedObjectUrl: string | null = null
 
 function videoStreamUrl(item: PlaybackSchedule) {
   return `${API_BASE}/stream/videos/${encodeURIComponent(item.videoId)}/stream`
-}
-
-function releasePreparedObjectUrl() {
-  if (preparedObjectUrl) URL.revokeObjectURL(preparedObjectUrl)
-  preparedObjectUrl = null
-}
-
-async function downloadPreparedVideo(item: PlaybackSchedule) {
-  try {
-    const blob = await loadScheduledVideoBlob(videoStreamUrl(item))
-    if (preparedPlayback.value?.scheduleId !== item.scheduleId) return
-    releasePreparedObjectUrl()
-    preparedObjectUrl = URL.createObjectURL(blob)
-    preparedVideoUrl.value = preparedObjectUrl
-  } catch (error) {
-    console.warn('Could not predownload scheduled video; falling back to streaming:', error)
-    if (preparedPlayback.value?.scheduleId !== item.scheduleId) return
-    usingRemoteFallback.value = true
-    preparedVideoUrl.value = videoStreamUrl(item)
-  }
 }
 
 function prepareNextScheduledVideo() {
@@ -91,63 +65,23 @@ function prepareNextScheduledVideo() {
     window.clearTimeout(playbackStartTimer)
     playbackStartTimer = undefined
   }
-  releasePreparedObjectUrl()
   preparedPlayback.value = next
   preparedVideoUrl.value = ''
-  preparedMediaReady.value = false
-  playbackDue.value = false
-  usingRemoteFallback.value = false
 
   const startsAt = preparedPlayback.value ? Date.parse(preparedPlayback.value.startsAt) : NaN
   if (preparedPlayback.value && Number.isFinite(startsAt)) {
     const item = preparedPlayback.value
     const start = () => {
       if (preparedPlayback.value?.scheduleId !== item.scheduleId) return
-      playbackDue.value = true
       playbackStartTimer = undefined
-      startPlaybackWhenReady()
+      preparedVideoUrl.value = videoStreamUrl(item)
+      activePlayback.value = item
+      playbackQueue.shift()
+      void nextTick(() => attemptScheduledPlayback())
     }
     if (startsAt <= Date.now()) start()
     else playbackStartTimer = window.setTimeout(start, startsAt - Date.now())
-    void downloadPreparedVideo(item)
   }
-}
-
-function checkPreparedMediaReadiness() {
-  const video = document.querySelector<HTMLVideoElement>('#scheduled-video')
-  if (!video || !preparedVideoUrl.value) return
-
-  const bufferedAhead = video.buffered.length > 0
-    ? video.buffered.end(video.buffered.length - 1) - video.currentTime
-    : 0
-  const locallyDownloaded = preparedVideoUrl.value.startsWith('blob:')
-  if (
-    (locallyDownloaded && video.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA)
-    || video.readyState >= HTMLMediaElement.HAVE_ENOUGH_DATA
-    || bufferedAhead >= 5
-  ) {
-    preparedMediaReady.value = true
-    startPlaybackWhenReady()
-  }
-}
-
-function startPlaybackWhenReady() {
-  if (!playbackDue.value || !preparedMediaReady.value || !preparedPlayback.value) return
-  activePlayback.value = preparedPlayback.value
-  playbackQueue.shift()
-  playbackDue.value = false
-  void nextTick(() => attemptScheduledPlayback())
-}
-
-function handlePreparedVideoError() {
-  if (!activePlayback.value && preparedPlayback.value && !usingRemoteFallback.value) {
-    releasePreparedObjectUrl()
-    usingRemoteFallback.value = true
-    preparedMediaReady.value = false
-    preparedVideoUrl.value = videoStreamUrl(preparedPlayback.value)
-    return
-  }
-  failScheduledPlayback()
 }
 
 async function attemptScheduledPlayback() {
@@ -167,8 +101,6 @@ async function attemptScheduledPlayback() {
 function failScheduledPlayback() {
   if (activePlayback.value) {
     playbackError.value = '動画を読み込めませんでした。Worker と動画ファイルを確認してください。'
-  } else if (preparedPlayback.value) {
-    playbackError.value = '予約動画を読み込めませんでした。動画ファイルと通信状態を確認してください。'
   }
 }
 
@@ -176,10 +108,8 @@ function finishScheduledPlayback() {
   activePlayback.value = null
   playbackError.value = ''
   playbackStalled.value = false
-  releasePreparedObjectUrl()
   preparedPlayback.value = null
   preparedVideoUrl.value = ''
-  preparedMediaReady.value = false
   prepareNextScheduledVideo()
 }
 
@@ -220,6 +150,10 @@ async function pollPlaybackSchedule() {
 const firstClick = useState(() => false);
 
 onMounted(async () => {
+  if ('caches' in window) {
+    void caches.delete('cp-dashboard-scheduled-video-v1').catch(() => undefined)
+  }
+
   // 画面クリック後に行う、バックグラウンドで正常に動作するための対策
   // iOS / Safariでは、画面クリック後に各種権限を取得する必要がある模様
   document.body.onclick = async () => {
@@ -287,7 +221,6 @@ onUnmounted(() => {
     window.clearInterval(schedulePollTimer);
   if (playbackStartTimer !== undefined)
     window.clearTimeout(playbackStartTimer);
-  releasePreparedObjectUrl()
 });
 </script>
 
@@ -353,14 +286,6 @@ onUnmounted(() => {
       </div>
     </div>
   </NuxtLayout>
-  <div
-    v-if="playbackDue && !activePlayback"
-    class="fixed bottom-4 left-1/2 z-[9999] -translate-x-1/2 rounded-lg bg-neutral/95 px-5 py-3 text-center text-neutral-content shadow-lg"
-    role="status"
-    aria-live="polite"
-  >
-    {{ playbackError || '予約動画を準備しています。準備ができ次第、再生します。' }}
-  </div>
   <section
     v-if="preparedPlayback"
     :class="activePlayback
@@ -374,17 +299,13 @@ onUnmounted(() => {
       :key="preparedPlayback.scheduleId"
       class="h-full w-full object-contain"
       :src="preparedVideoUrl || undefined"
-      preload="auto"
+      preload="none"
       playsinline
       disablepictureinpicture
-      @loadeddata="checkPreparedMediaReadiness"
-      @canplay="checkPreparedMediaReadiness"
-      @canplaythrough="checkPreparedMediaReadiness"
-      @progress="checkPreparedMediaReadiness"
       @waiting="playbackStalled = true"
       @playing="playbackStalled = false"
       @ended="finishScheduledPlayback"
-      @error="handlePreparedVideoError"
+      @error="failScheduledPlayback"
     />
 
     <div
