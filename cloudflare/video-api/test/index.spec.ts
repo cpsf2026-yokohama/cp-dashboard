@@ -1,11 +1,22 @@
 import { env, createExecutionContext, waitOnExecutionContext, SELF } from "cloudflare:test";
 import { describe, it, expect } from "vitest";
-import worker, { hasRoleForRoute, requiresAccessAuthentication } from "../src/index";
+import worker, { hasRoleForRoute, requiresAccessAuthentication, resolveAccessUser } from "../src/index";
 import { onRequest as proxyApiRequest } from "../../../functions/api/[[path]]";
 
 const IncomingRequest = Request<unknown, IncomingRequestCfProperties>;
 
 describe("Video API worker", () => {
+  it("fails closed when Access email matching finds ambiguous case variants", () => {
+    expect(resolveAccessUser([
+      { id: "admin-1", email: "person@example.com", role: "admin" },
+      { id: "mentor-1", email: "PERSON@example.com", role: "mentor" },
+    ])).toBeNull();
+    expect(resolveAccessUser([{ id: "unknown", email: "person@example.com", role: "owner" }])).toBeNull();
+    expect(resolveAccessUser([{ id: "mentor-1", email: "person@example.com", role: "mentor" }])).toEqual({
+      id: "mentor-1", email: "person@example.com", role: "mentor",
+    });
+  });
+
   it("allows browser preflight requests for shared settings updates", async () => {
     const response = await worker.fetch(
       new IncomingRequest("http://localhost:8787/api/settings", {
@@ -270,6 +281,12 @@ describe("Video API worker", () => {
     expect(hasRoleForRoute({ role: "mentor" }, "GET", "/api/change-requests")).toBe(true);
     expect(hasRoleForRoute({ role: "mentor" }, "POST", "/api/change-requests/request-1/approve")).toBe(true);
     expect(hasRoleForRoute({ role: "admin" }, "GET", "/api/change-requests")).toBe(false);
+    for (const role of ["admin", "producer", "operator"] as const) {
+      expect(hasRoleForRoute({ role }, "POST", "/api/change-requests/request-1/approve")).toBe(false);
+      expect(hasRoleForRoute({ role }, "POST", "/api/change-requests/request-1/reject")).toBe(false);
+    }
+    expect(requiresAccessAuthentication("POST", "/api/change-requests/request-1/approve")).toBe(true);
+    expect(requiresAccessAuthentication("POST", "/api/change-requests/request-1/reject")).toBe(true);
     expect(hasRoleForRoute({ role: "mentor" }, "PUT", "/api/settings")).toBe(true);
     expect(hasRoleForRoute({ role: "producer" }, "POST", "/api/videos")).toBe(true);
     expect(hasRoleForRoute({ role: "producer" }, "POST", "/api/schedules")).toBe(false);
@@ -282,6 +299,12 @@ describe("Video API worker", () => {
     expect(requiresAccessAuthentication("DELETE", "/api/videos/video-1")).toBe(true);
     expect(requiresAccessAuthentication("GET", "/api/videos/video-1/stream")).toBe(false);
     expect(hasRoleForRoute({ role: "admin" }, "GET", "/api/users")).toBe(true);
+    expect(hasRoleForRoute({ role: "mentor" }, "GET", "/api/users")).toBe(true);
+    expect(hasRoleForRoute({ role: "admin" }, "PATCH", "/api/users/user-1")).toBe(true);
+    expect(hasRoleForRoute({ role: "mentor" }, "PATCH", "/api/users/user-1")).toBe(false);
+    expect(hasRoleForRoute({ role: "producer" }, "PATCH", "/api/users/user-1")).toBe(false);
+    expect(hasRoleForRoute({ role: "operator" }, "PATCH", "/api/users/user-1")).toBe(false);
+    expect(hasRoleForRoute({ role: "mentor" }, "POST", "/api/users")).toBe(false);
     expect(hasRoleForRoute({ role: "producer" }, "GET", "/api/users")).toBe(false);
     expect(hasRoleForRoute({ role: "operator" }, "POST", "/api/users")).toBe(false);
     expect(requiresAccessAuthentication("PATCH", "/api/users/user-1")).toBe(true);
@@ -290,7 +313,7 @@ describe("Video API worker", () => {
   it("applies a settings change only after a different mentor approves it", async () => {
     const executed: Array<{ sql: string; values: unknown[] }> = [];
     const requestRow = {
-      id: "request-1", requesterId: "requester-1", kind: "settings",
+      id: "request-1", requesterId: "requester-1", requesterEmail: "requester@example.invalid", kind: "settings",
       payloadJson: JSON.stringify({ settings: { isChimeEnabled: true } }), status: "pending",
     };
     const fullApply = {
@@ -335,7 +358,7 @@ describe("Video API worker", () => {
           first: async () => sql.includes("FROM users")
             ? { id: "local-test-admin", email: "mentor@example.invalid", role: "mentor" }
             : sql.includes("FROM change_requests")
-              ? { id: "request-1", requesterId: "local-test-admin", kind: "settings", payloadJson: "{}", status: "pending" }
+              ? { id: "request-1", requesterId: "local-test-admin", requesterEmail: "mentor@example.invalid", kind: "settings", payloadJson: "{}", status: "pending" }
               : null,
           run: async () => { reviewUpdates.push(sql); return { success: true, meta: { changes: 1 } }; },
         };
@@ -363,6 +386,181 @@ describe("Video API worker", () => {
     expect(reviewUpdates.some(sql => sql.includes("SET status = ?"))).toBe(true);
   });
 
+  it("blocks self-approval when the requester has the same email under a different user id", async () => {
+    const updates: string[] = [];
+    const db = {
+      prepare: (sql: string) => {
+        const statement = {
+          bind: (..._values: unknown[]) => statement,
+          first: async () => sql.includes("FROM users")
+            ? { id: "reviewer-id", email: "Mentor@Example.invalid", role: "mentor" }
+            : sql.includes("FROM change_requests")
+              ? { id: "request-1", requesterId: "old-user-id", requesterEmail: " mentor@example.invalid ", kind: "settings", payloadJson: "{}", status: "pending" }
+              : null,
+          run: async () => { updates.push(sql); return { success: true, meta: { changes: 1 } }; },
+        };
+        return statement;
+      },
+    } as unknown as D1Database;
+    const response = await worker.fetch(
+      new IncomingRequest("http://127.0.0.1:8787/api/change-requests/request-1/approve", { method: "POST" }),
+      { ...env, DB: db, LOCAL_AUTH_BYPASS: "true", LOCAL_AUTH_BYPASS_ROLE: "mentor", ACCESS_TEAM_DOMAIN: "", ACCESS_AUD: "" },
+      createExecutionContext(),
+    );
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({ error: "Mentors cannot approve their own requests" });
+    expect(updates).toHaveLength(0);
+  });
+
+  it("keeps video deletion retryable if removing the R2 object fails", async () => {
+    const operations: string[] = [];
+    let failR2Delete = true;
+    const db = {
+      prepare: (sql: string) => {
+        const statement = {
+          bind: (..._values: unknown[]) => statement,
+          first: async () => {
+            if (sql.includes("FROM users")) return { id: "reviewer", email: "mentor@example.invalid", role: "mentor" };
+            if (sql.includes("FROM change_requests")) return { id: "request-1", requesterId: "requester", requesterEmail: "requester@example.invalid", kind: "video.delete", payloadJson: JSON.stringify({ id: "video-1" }), status: "pending" };
+            if (sql.includes("FROM schedules")) return null;
+            if (sql.includes("FROM videos")) return { r2Key: "videos/video-1" };
+            return null;
+          },
+          run: async () => { operations.push(`D1:${sql}`); return { success: true, meta: { changes: 1 } }; },
+        };
+        return statement;
+      },
+    } as unknown as D1Database;
+    const bucket = {
+      delete: async (key: string) => {
+        operations.push(`R2:${key}`);
+        if (failR2Delete) throw new Error("R2 unavailable");
+      },
+    } as unknown as R2Bucket;
+    const localEnv = { ...env, DB: db, VIDEO_BUCKET: bucket, LOCAL_AUTH_BYPASS: "true", LOCAL_AUTH_BYPASS_ROLE: "mentor", ACCESS_TEAM_DOMAIN: "", ACCESS_AUD: "" };
+    const makeRequest = () => new IncomingRequest("http://127.0.0.1:8787/api/change-requests/request-1/approve", { method: "POST" });
+
+    const failed = await worker.fetch(makeRequest(), localEnv, createExecutionContext());
+    expect(failed.status).toBe(409);
+    expect(operations.some(operation => operation.includes("DELETE FROM videos"))).toBe(false);
+    expect(operations.some(operation => operation.includes("SET status = 'pending'"))).toBe(true);
+
+    failR2Delete = false;
+    operations.length = 0;
+    const retried = await worker.fetch(makeRequest(), localEnv, createExecutionContext());
+    expect(retried.status).toBe(200);
+    expect(operations.indexOf("R2:videos/video-1")).toBeLessThan(operations.findIndex(operation => operation.includes("DELETE FROM videos")));
+  });
+
+  it("applies approved schedule additions and removals", async () => {
+    const writes: Array<{ sql: string; values: unknown[] }> = [];
+    let scheduleAlreadyInserted = false;
+    let requestRow = { id: "request-1", requesterId: "requester", requesterEmail: "requester@example.invalid", kind: "schedule.create", payloadJson: JSON.stringify({ id: "schedule-1", videoId: "video-1", startsAt: "2030-01-01T00:00:00.000Z" }), status: "pending" };
+    const db = {
+      prepare: (sql: string) => {
+        let values: unknown[] = [];
+        const statement = {
+          bind: (...bound: unknown[]) => { values = bound; return statement; },
+          first: async () => sql.includes("FROM users")
+            ? { id: "local-test-admin", email: "mentor@example.invalid", role: "mentor" }
+            : sql.includes("FROM change_requests") ? requestRow
+              : sql.includes("SELECT video_id AS videoId") && scheduleAlreadyInserted ? { videoId: "video-1", startsAt: "2030-01-01T00:00:00.000Z" }
+              : sql.includes("FROM videos") ? { id: "video-1" }
+                : null,
+          run: async () => { writes.push({ sql, values }); if (sql.includes("INSERT INTO schedules")) scheduleAlreadyInserted = true; return { success: true, meta: { changes: 1 } }; },
+        };
+        return statement;
+      },
+    } as unknown as D1Database;
+    const localEnv = { ...env, DB: db, LOCAL_AUTH_BYPASS: "true", LOCAL_AUTH_BYPASS_ROLE: "mentor", ACCESS_TEAM_DOMAIN: "", ACCESS_AUD: "" };
+    const review = () => worker.fetch(
+      new IncomingRequest("http://127.0.0.1:8787/api/change-requests/request-1/approve", { method: "POST" }),
+      localEnv,
+      createExecutionContext(),
+    );
+
+    expect((await review()).status).toBe(200);
+    expect(writes.some(({ sql, values }) => sql.includes("INSERT INTO schedules") && values[0] === "schedule-1")).toBe(true);
+    writes.length = 0;
+    expect((await review()).status).toBe(200);
+    expect(writes.some(({ sql }) => sql.includes("INSERT INTO schedules"))).toBe(false);
+
+    requestRow = { ...requestRow, kind: "schedule.delete", payloadJson: JSON.stringify({ id: "schedule-1" }) };
+    writes.length = 0;
+    expect((await review()).status).toBe(200);
+    expect(writes.some(({ sql, values }) => sql.includes("DELETE FROM schedules") && values[0] === "schedule-1")).toBe(true);
+  });
+
+  it("applies approved banner replacement and deletion to the requested orientation", async () => {
+    const changes: string[] = [];
+    let stagingAvailable = true;
+    let publishedByRequest = false;
+    let requestRow = { id: "request-1", requesterId: "requester", requesterEmail: "requester@example.invalid", kind: "banner.upload", payloadJson: JSON.stringify({ kind: "horizontal", stagingKey: "pending/banner-1", contentType: "image/png" }), status: "pending" };
+    const db = {
+      prepare: (sql: string) => {
+        const statement = {
+          bind: () => statement,
+          first: async () => sql.includes("FROM users")
+            ? { id: "local-test-admin", email: "mentor@example.invalid", role: "mentor" }
+            : sql.includes("FROM change_requests") ? requestRow : null,
+          run: async () => ({ success: true, meta: { changes: 1 } }),
+        };
+        return statement;
+      },
+    } as unknown as D1Database;
+    const bucket = {
+      get: async (key: string) => key === "pending/banner-1" && stagingAvailable ? { body: new Response(new Uint8Array([1, 2, 3])).body!, httpMetadata: { contentType: "image/png" } } : null,
+      head: async (key: string) => key === "banners/horizontal" && publishedByRequest ? { customMetadata: { changeRequestId: "request-1" } } : null,
+      put: async (key: string) => { changes.push(`put:${key}`); publishedByRequest = true; },
+      delete: async (key: string) => { changes.push(`delete:${key}`); if (key === "pending/banner-1") stagingAvailable = false; },
+    } as unknown as R2Bucket;
+    const localEnv = { ...env, DB: db, VIDEO_BUCKET: bucket, LOCAL_AUTH_BYPASS: "true", LOCAL_AUTH_BYPASS_ROLE: "mentor", ACCESS_TEAM_DOMAIN: "", ACCESS_AUD: "" };
+    const review = () => worker.fetch(
+      new IncomingRequest("http://127.0.0.1:8787/api/change-requests/request-1/approve", { method: "POST" }),
+      localEnv,
+      createExecutionContext(),
+    );
+
+    expect((await review()).status).toBe(200);
+    expect(changes).toEqual(["put:banners/horizontal", "delete:pending/banner-1"]);
+
+    changes.length = 0;
+    expect((await review()).status).toBe(200);
+    expect(changes).toEqual([]);
+
+    requestRow = { ...requestRow, kind: "banner.delete", payloadJson: JSON.stringify({ kind: "vertical" }) };
+    changes.length = 0;
+    expect((await review()).status).toBe(200);
+    expect(changes).toEqual(["delete:banners/vertical"]);
+  });
+
+  it("uploads videos directly without creating an approval request", async () => {
+    const statements: string[] = [];
+    const admin = { id: "local-test-admin", email: "local-test-admin@example.invalid", role: "admin" };
+    const db = {
+      prepare: (sql: string) => ({
+        bind: (..._values: unknown[]) => ({
+          first: async () => sql.includes("FROM users") ? admin : null,
+          run: async () => { statements.push(sql); return { success: true, meta: { changes: 1 } }; },
+        }),
+      }),
+    } as unknown as D1Database;
+    const storedKeys: string[] = [];
+    const bucket = { put: async (key: string) => { storedKeys.push(key); } } as unknown as R2Bucket;
+    const form = new FormData();
+    form.set("title", "Test video");
+    form.set("file", new File([new Uint8Array([1, 2, 3])], "test.mp4", { type: "video/mp4" }));
+    const response = await worker.fetch(
+      new IncomingRequest("http://127.0.0.1:8787/api/videos", { method: "POST", body: form }),
+      { ...env, DB: db, VIDEO_BUCKET: bucket, LOCAL_AUTH_BYPASS: "true", ACCESS_TEAM_DOMAIN: "", ACCESS_AUD: "" },
+      createExecutionContext(),
+    );
+    expect(response.status).toBe(201);
+    expect(storedKeys).toHaveLength(1);
+    expect(statements.some(sql => sql.includes("INSERT INTO videos"))).toBe(true);
+    expect(statements.some(sql => sql.includes("INSERT INTO change_requests"))).toBe(false);
+  });
+
   it("lets the requester cancel their own pending request", async () => {
     const statements: string[] = [];
     const requesterId = "local-test-admin";
@@ -372,7 +570,7 @@ describe("Video API worker", () => {
           bind: (..._values: unknown[]) => statement,
           first: async () => sql.includes("FROM users")
             ? { id: requesterId, email: "mentor@example.invalid", role: "mentor" }
-            : sql.includes("FROM change_requests") ? { requesterId: "legacy-requester-id", requesterEmail: "MENTOR@example.invalid", payloadJson: JSON.stringify({ kind: "horizontal" }) } : null,
+            : sql.includes("FROM change_requests") ? { requesterId: "legacy-requester-id", requesterEmail: " MENTOR@example.invalid ", payloadJson: JSON.stringify({ kind: "horizontal" }) } : null,
           run: async () => { statements.push(sql); return { success: true, meta: { changes: 1 } }; },
         };
         return statement;
@@ -611,6 +809,33 @@ describe("Video API worker", () => {
     expect(insertedUsers[0][1]).toBe("producer@example.com");
     expect(insertedUsers[0][2]).toBe("producer");
     expect(auditActions).toEqual(["user.created"]);
+  });
+
+  it("rejects a self-promotion to mentor after the caller is an admin", async () => {
+    const self = { id: "local-test-admin", email: "admin@example.invalid", role: "admin", createdAt: "2026-01-01" };
+    let roleUpdated = false;
+    const db = {
+      prepare: (sql: string) => ({
+        bind: (..._values: unknown[]) => ({
+          first: async () => sql.includes("WHERE id = ? AND role = 'admin'") ? self : self,
+          run: async () => { roleUpdated = true; return { success: true, meta: { changes: 1 } }; },
+        }),
+      }),
+    } as unknown as D1Database;
+    const response = await worker.fetch(new IncomingRequest("http://127.0.0.1:8787/api/users/local-test-admin", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ role: "mentor" }),
+    }), {
+      ...env,
+      DB: db,
+      LOCAL_AUTH_BYPASS: "true",
+      ACCESS_TEAM_DOMAIN: "",
+      ACCESS_AUD: "",
+    }, createExecutionContext());
+
+    expect(response.status).toBe(403);
+    expect(roleUpdated).toBe(false);
   });
 
   it("forwards the original request and Access/Range headers through the Pages proxy", async () => {
@@ -1006,6 +1231,41 @@ describe("Video API worker", () => {
     expect(changes).toHaveLength(1);
     expect(changes[0].values[3]).toContain("横バナー: 有効 → 無効");
     expect(JSON.parse(String(changes[0].values[4])).changes).toEqual({ isBannerVisible: { before: true, after: false } });
+  });
+
+  it("rejects unsupported, malformed, and no-op shared-setting requests", async () => {
+    const inserts: string[] = [];
+    const db = {
+      prepare: (sql: string) => {
+        const statement = {
+          bind: (..._values: unknown[]) => statement,
+          first: async () => sql.includes("FROM users")
+            ? { id: "local-test-admin", email: "local-test-admin@example.invalid", role: "admin" }
+            : sql.includes("FROM shared_settings")
+              ? { settingsJson: JSON.stringify({ isChimeEnabled: false }), applyJson: JSON.stringify({ countdownDates: true, yearlyCountdownDates: true, userChimeTimes: true, isChimeEnabled: true, isPreChimeEnabled: true, isBannerVisible: true, isVerticalBanner: true }) }
+              : null,
+          run: async () => { if (sql.includes("INSERT INTO change_requests")) inserts.push(sql); return { success: true, meta: { changes: 1 } }; },
+        };
+        return statement;
+      },
+    } as unknown as D1Database;
+    const localEnv = { ...env, DB: db, LOCAL_AUTH_BYPASS: "true", ACCESS_TEAM_DOMAIN: "", ACCESS_AUD: "" };
+    const request = (body: unknown) => worker.fetch(
+      new IncomingRequest("http://127.0.0.1:8787/api/settings", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }),
+      localEnv,
+      createExecutionContext(),
+    );
+    const invalidBodies = [
+      { settings: { unsupportedSetting: "value" } },
+      { settings: { isChimeEnabled: "yes" } },
+      { apply: { countdownDates: true, yearlyCountdownDates: true, userChimeTimes: true, isChimeEnabled: true, isPreChimeEnabled: true, isBannerVisible: true, isVerticalBanner: true, unexpected: true } },
+    ];
+    for (const body of invalidBodies) expect((await request(body)).status).toBe(400);
+
+    const noOp = await request({ settings: { isChimeEnabled: false } });
+    expect(noOp.status).toBe(400);
+    expect(await noOp.json()).toEqual({ error: "変更内容がありません" });
+    expect(inserts).toHaveLength(0);
   });
 
   it("shows a before and after comparison for older pending setting requests", async () => {

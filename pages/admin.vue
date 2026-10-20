@@ -49,6 +49,7 @@ const API_BASE = useVideoApiBase()
 
 const activeTab = ref<'overview' | 'videos' | 'schedule' | 'users' | 'settings'>('overview')
 const canManageUsers = ref(false)
+const canChangeUserRoles = ref(false)
 const canReviewRequests = ref(false)
 const managedUsers = ref<ManagedUser[]>([])
 const usersLoading = ref(false)
@@ -216,9 +217,10 @@ async function loadVideos() {
       throw new Error(`HTTP ${response.status}`)
     }
 
-    const data: { videos: Video[], canManageUsers?: boolean, canReviewRequests?: boolean } = await response.json()
+    const data: { videos: Video[], canManageUsers?: boolean, canChangeUserRoles?: boolean, canReviewRequests?: boolean } = await response.json()
     videos.value = data.videos
     canManageUsers.value = data.canManageUsers === true
+    canChangeUserRoles.value = data.canChangeUserRoles === true
     canReviewRequests.value = data.canReviewRequests === true
 
     if (
@@ -922,8 +924,8 @@ function openSchedule() {
 
       <template v-else-if="activeTab === 'users' && canManageUsers">
         <section class="panel">
-          <div class="section-heading"><h2>ユーザーを登録</h2></div>
-          <form class="user-form" @submit.prevent="addUser">
+          <div v-if="canChangeUserRoles" class="section-heading"><h2>ユーザーを登録</h2></div>
+          <form v-if="canChangeUserRoles" class="user-form" @submit.prevent="addUser">
             <label class="field"><span>メールアドレス</span><input v-model="newUserEmail" type="email" required maxlength="254" placeholder="メンバーのメールアドレス"></label>
             <label class="field">
               <span>役割</span>
@@ -940,7 +942,8 @@ function openSchedule() {
           <div v-else class="user-list">
             <div v-for="user in managedUsers" :key="user.id" class="user-row">
               <span class="item-title">{{ user.email }}</span>
-              <select :value="user.role" :aria-label="`${user.email}の役割`" @change="changeUserRole(user, $event)"><option value="producer">動画制作担当</option><option value="operator">運用担当</option><option value="admin">管理者</option><option value="mentor">メンター（管理者＋承認）</option></select>
+              <select v-if="canChangeUserRoles" :value="user.role" :aria-label="`${user.email}の役割`" @change="changeUserRole(user, $event)"><option value="producer">動画制作担当</option><option value="operator">運用担当</option><option value="admin">管理者</option><option value="mentor">メンター（管理者＋承認）</option></select>
+              <span v-else class="item-meta">{{ user.role }}</span>
             </div>
             <p v-if="!managedUsers.length" class="state-message muted">ユーザーがいません。</p>
           </div>

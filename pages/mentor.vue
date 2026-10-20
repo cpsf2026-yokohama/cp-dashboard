@@ -5,6 +5,7 @@ const requests = ref<ChangeRequest[]>([])
 const loading = ref(true)
 const error = ref('')
 const busyId = ref('')
+const failedImages = ref(new Set<string>())
 
 async function loadRequests() {
   loading.value = true
@@ -13,8 +14,10 @@ async function loadRequests() {
     const response = await fetch(`${api}/change-requests`)
     if (!response.ok) throw new Error(response.status === 403 ? 'メンター権限が必要です。' : `HTTP ${response.status}`)
     requests.value = (await response.json() as { requests: ChangeRequest[] }).requests
+    failedImages.value = new Set()
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : '申請を読み込めませんでした。'
+    requests.value = []
   } finally { loading.value = false }
 }
 
@@ -61,8 +64,9 @@ function currentBannerUrl(item: ChangeRequest) {
 function pendingBannerUrl(item: ChangeRequest) {
   return `${api}/change-requests/${encodeURIComponent(item.id)}/preview`
 }
-function hideUnavailableImage(event: Event) {
-  if (event.target instanceof HTMLImageElement) event.target.style.display = 'none'
+function hideUnavailableImage(event: Event, key: string) {
+  if (event.currentTarget instanceof HTMLImageElement) event.currentTarget.style.display = 'none'
+  failedImages.value = new Set([...failedImages.value, key])
 }
 function details(item: ChangeRequest) {
   const payload = item.payload
@@ -72,10 +76,10 @@ function details(item: ChangeRequest) {
     if (typeof value === 'boolean') return value ? '有効' : '無効'
     if (Array.isArray(value)) {
       const contents = value.map(entry => typeof entry === 'object' && entry !== null ? JSON.stringify(entry) : String(entry)).join('、')
-      return value.length ? `${value.length}件: ${contents.slice(0, 140)}${contents.length > 140 ? '…' : ''}` : '0件'
+      return value.length ? `${value.length}件: ${contents}` : '0件'
     }
     if (value === undefined) return '未設定'
-    if (typeof value === 'object' && value !== null) return JSON.stringify(value).slice(0, 140)
+    if (typeof value === 'object' && value !== null) return JSON.stringify(value)
     return String(value)
   }
   if (payload.changes && typeof payload.changes === 'object') {
@@ -102,16 +106,16 @@ onMounted(() => void loadRequests())
     <header><div><p class="eyebrow">MENTOR REVIEW</p><h1>変更リクエスト</h1><p>承認されるまで、申請内容はサイトや再生端末に反映されません。</p></div><nav><a href="/admin">管理画面</a><button @click="void loadRequests()">再読み込み</button></nav></header>
     <p v-if="error" class="error" role="alert">{{ error }}</p>
     <p v-if="loading" class="empty" role="status">申請を読み込み中...</p>
-    <p v-else-if="requests.length === 0" class="empty">承認待ちの申請はありません。</p>
-    <section v-else class="request-list" aria-label="承認待ち">
+    <p v-else-if="!error && requests.length === 0" class="empty">承認待ちの申請はありません。</p>
+    <section v-else-if="!error && requests.length > 0" class="request-list" aria-label="承認待ち">
       <article v-for="item in requests" :key="item.id" class="request-card">
         <div class="request-header"><div><h2>{{ item.summary }}</h2><p>{{ item.requesterEmail }} · {{ formatDate(item.createdAt) }}</p></div><span>{{ kindLabel(item.kind) }}</span></div>
         <div v-if="bannerKind(item) && (item.kind === 'banner.upload' || item.kind === 'banner.delete')" class="banner-comparison" aria-label="バナー画像の変更比較">
-          <figure><figcaption>現在</figcaption><img :src="currentBannerUrl(item)" :alt="`${bannerKind(item) === 'horizontal' ? '横' : '縦'}バナーの現在の画像`" @error="hideUnavailableImage"></figure>
+          <figure><figcaption>現在</figcaption><img v-if="!failedImages.has(`${item.id}:current`)" :src="currentBannerUrl(item)" :alt="`${bannerKind(item) === 'horizontal' ? '横' : '縦'}バナーの現在の画像`" @error="hideUnavailableImage($event, `${item.id}:current`)"><p v-else class="image-result">現在の画像を読み込めません</p></figure>
           <div class="change-arrow" aria-hidden="true">→</div>
-          <figure><figcaption>変更後</figcaption><img v-if="item.kind === 'banner.upload'" :src="pendingBannerUrl(item)" :alt="`${bannerKind(item) === 'horizontal' ? '横' : '縦'}バナーの申請画像`" @error="hideUnavailableImage"><p v-else class="image-result">画像なし（削除）</p></figure>
+          <figure><figcaption>変更後</figcaption><img v-if="item.kind === 'banner.upload' && !failedImages.has(`${item.id}:pending`)" :src="pendingBannerUrl(item)" :alt="`${bannerKind(item) === 'horizontal' ? '横' : '縦'}バナーの申請画像`" @error="hideUnavailableImage($event, `${item.id}:pending`)"><p v-else-if="item.kind === 'banner.upload'" class="image-result">申請画像を読み込めません</p><p v-else class="image-result">画像なし（削除）</p></figure>
         </div>
-        <details v-if="details(item).length"><summary>申請内容</summary><dl><template v-for="([label, value], index) in details(item)" :key="`${label}-${index}`"><dt>{{ label }}</dt><dd>{{ value }}</dd></template></dl></details>
+        <details v-if="details(item).length" open><summary>申請内容</summary><dl><template v-for="([label, value], index) in details(item)" :key="`${label}-${index}`"><dt>{{ label }}</dt><dd>{{ value }}</dd></template></dl></details>
         <div class="actions"><template v-if="item.isMine"><button class="reject" :disabled="busyId !== ''" @click="void cancel(item)">{{ busyId === item.id ? '処理中...' : '自分の申請を取り消す' }}</button></template><template v-else><button class="reject" :disabled="busyId !== ''" @click="void decide(item, 'reject')">却下</button><button class="approve" :disabled="busyId !== ''" @click="void decide(item, 'approve')">{{ busyId === item.id ? '処理中...' : '承認して反映' }}</button></template></div>
       </article>
     </section>

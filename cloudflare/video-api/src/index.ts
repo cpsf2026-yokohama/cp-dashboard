@@ -51,12 +51,28 @@ const defaultSharedSettingsApply: SharedSettingsApply = {
 function parseSharedSettingsApply(value: unknown): SharedSettingsApply | null {
   if (typeof value !== "object" || value === null) return null;
   const record = value as Record<string, unknown>;
-  if (!sharedSettingKeys.every((key) => typeof record[key] === "boolean")) {
+  if (Object.keys(record).some((key) => !sharedSettingKeys.includes(key as (typeof sharedSettingKeys)[number])) ||
+      !sharedSettingKeys.every((key) => typeof record[key] === "boolean")) {
     return null;
   }
   return Object.fromEntries(
     sharedSettingKeys.map((key) => [key, record[key]]),
   ) as SharedSettingsApply;
+}
+
+function isSharedSettingsPatch(value: unknown): value is Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  if (Object.keys(record).some((key) => !sharedSettingKeys.includes(key as (typeof sharedSettingKeys)[number]))) return false;
+  for (const key of sharedSettingKeys) {
+    if (!(key in record)) continue;
+    if (key === "isChimeEnabled" || key === "isPreChimeEnabled" || key === "isBannerVisible" || key === "isVerticalBanner") {
+      if (typeof record[key] !== "boolean") return false;
+    } else if (!Array.isArray(record[key])) {
+      return false;
+    }
+  }
+  try { return JSON.stringify(record).length <= 100_000; } catch { return false; }
 }
 
 type UserRole = "admin" | "producer" | "operator" | "mentor";
@@ -65,6 +81,11 @@ interface ApiUser {
   id: string;
   email: string;
   role: UserRole;
+}
+
+export function resolveAccessUser(matches: Array<{ id: string; email: string; role: string }>): ApiUser | null {
+  if (matches.length !== 1 || !isUserRole(matches[0].role)) return null;
+  return { id: matches[0].id, email: matches[0].email, role: matches[0].role };
 }
 
 interface AccessClaims {
@@ -112,11 +133,15 @@ export function hasRoleForRoute(user: Pick<ApiUser, "role">, method: string, pat
   if (
     (method === "PUT" && pathname === "/api/settings") ||
     ((method === "PUT" || method === "DELETE") && /^\/api\/banners\/(horizontal|vertical)$/.test(pathname)) ||
-    (method === "GET" && pathname === "/api/users") ||
-    (method === "POST" && pathname === "/api/users") ||
-    (method === "PATCH" && /^\/api\/users\/[^/]+$/.test(pathname))
+    (method === "GET" && pathname === "/api/users")
   ) {
     return user.role === "admin" || user.role === "mentor";
+  }
+
+  // Mentor approval authority does not include changing account roles.
+  if ((method === "POST" && pathname === "/api/users") ||
+      (method === "PATCH" && /^\/api\/users\/[^/]+$/.test(pathname))) {
+    return user.role === "admin";
   }
 
   if (method === "POST" && pathname === "/api/videos") {
@@ -287,19 +312,20 @@ async function getAccessUser(request: Request, env: Env): Promise<{
     );
     if (!validSignature) throw new Error("Invalid token signature");
 
-    const user = await env.DB.prepare(`
+    const userMatches = await env.DB.prepare(`
       SELECT id, email, role
       FROM users
       WHERE lower(email) = lower(?)
     `)
       .bind(claims.email.trim())
-      .first<{ id: string; email: string; role: string }>();
+      .all<{ id: string; email: string; role: string }>();
+    const user = resolveAccessUser(userMatches.results);
 
-    if (!user || !["admin", "producer", "operator", "mentor"].includes(user.role)) {
+    if (!user) {
       return { user: null, response: jsonError("User is not authorized", 403) };
     }
 
-    return { user: { id: user.id, email: user.email, role: user.role as UserRole }, response: null };
+    return { user, response: null };
   } catch {
     return { user: null, response: jsonError("Invalid Access authentication", 401) };
   }
@@ -379,6 +405,12 @@ async function applyChangeRequest(env: Env, reviewer: string, row: { id: string;
       const videoId = String(payload.videoId); const startsAt = String(payload.startsAt);
       const video = await env.DB.prepare("SELECT id FROM videos WHERE id = ?").bind(videoId).first();
       if (!video) throw new Error("Video no longer exists");
+      const existing = await env.DB.prepare("SELECT video_id AS videoId, starts_at AS startsAt FROM schedules WHERE id = ?")
+        .bind(String(payload.id)).first<{ videoId: string; startsAt: string }>();
+      if (existing) {
+        if (existing.videoId !== videoId || existing.startsAt !== startsAt) throw new Error("Schedule ID is already used by another schedule");
+        break;
+      }
       await env.DB.prepare("INSERT INTO schedules (id, video_id, starts_at, created_by) VALUES (?, ?, ?, ?)")
         .bind(String(payload.id), videoId, startsAt, row.requesterId).run();
       break;
@@ -397,16 +429,28 @@ async function applyChangeRequest(env: Env, reviewer: string, row: { id: string;
     }
     case "video.delete": {
       const id = String(payload.id);
+      const video = await env.DB.prepare("SELECT r2_key AS r2Key FROM videos WHERE id = ?").bind(id).first<{ r2Key: string }>();
+      if (!video) break;
       const active = await env.DB.prepare("SELECT id FROM schedules WHERE video_id = ? LIMIT 1").bind(id).first();
       if (active) throw new Error("Remove this video's schedules before deleting it");
-      const video = await env.DB.prepare("SELECT r2_key AS r2Key FROM videos WHERE id = ?").bind(id).first<{ r2Key: string }>();
-      if (!video) throw new Error("Video no longer exists");
-      await env.DB.prepare("DELETE FROM videos WHERE id = ?").bind(id).run(); await env.VIDEO_BUCKET.delete(video.r2Key); break;
+      // Delete the object before its metadata so a failed R2 operation leaves
+      // the request retryable instead of orphaning an undeletable video row.
+      await env.VIDEO_BUCKET.delete(video.r2Key);
+      await env.DB.prepare("DELETE FROM videos WHERE id = ?").bind(id).run();
+      break;
     }
     case "banner.upload": {
+      const publicKey = `banners/${String(payload.kind)}`;
       const staged = await env.VIDEO_BUCKET.get(String(payload.stagingKey));
-      if (!staged) throw new Error("Staged banner file is missing");
-      await env.VIDEO_BUCKET.put(`banners/${String(payload.kind)}`, staged.body, { httpMetadata: { contentType: String(payload.contentType) } });
+      if (!staged) {
+        const published = await env.VIDEO_BUCKET.head(publicKey);
+        if (published?.customMetadata?.changeRequestId === row.id) break;
+        throw new Error("Staged banner file is missing");
+      }
+      await env.VIDEO_BUCKET.put(publicKey, staged.body, {
+        httpMetadata: { contentType: String(payload.contentType) },
+        customMetadata: { changeRequestId: row.id },
+      });
       await env.VIDEO_BUCKET.delete(String(payload.stagingKey)); break;
     }
     case "banner.delete": await env.VIDEO_BUCKET.delete(`banners/${String(payload.kind)}`); break;
@@ -518,7 +562,7 @@ export default {
           if (descriptions.length) summary = descriptions.join("・");
           else if (Object.keys(requested).length) summary = "共有設定の申請（変更前の履歴なし）";
         }
-        return { ...row, isMine: row.requesterId === accessUser!.id || String(row.requesterEmail).toLowerCase() === accessUser!.email.toLowerCase(), summary, payloadJson: undefined, payload };
+        return { ...row, isMine: row.requesterId === accessUser!.id || String(row.requesterEmail).trim().toLowerCase() === accessUser!.email.trim().toLowerCase(), summary, payloadJson: undefined, payload };
       }) });
     } else if (request.method === "GET" && /^\/api\/change-requests\/[^/]+\/preview$/.test(url.pathname)) {
       const id = decodeURIComponent(url.pathname.split("/")[3]);
@@ -541,7 +585,7 @@ export default {
       const id = decodeURIComponent(url.pathname.slice("/api/change-requests/".length));
       const row = await env.DB.prepare("SELECT cr.requester_id AS requesterId, u.email AS requesterEmail, cr.payload_json AS payloadJson FROM change_requests cr JOIN users u ON u.id = cr.requester_id WHERE cr.id = ? AND cr.status = 'pending'")
         .bind(id).first<{ requesterId: string; requesterEmail: string; payloadJson: string }>();
-      if (!row || (row.requesterId !== accessUser!.id && row.requesterEmail.toLowerCase() !== accessUser!.email.toLowerCase())) {
+      if (!row || (row.requesterId !== accessUser!.id && row.requesterEmail.trim().toLowerCase() !== accessUser!.email.trim().toLowerCase())) {
         response = jsonError("Pending request not found", 404);
       } else {
         const deleted = await env.DB.prepare("DELETE FROM change_requests WHERE id = ? AND requester_id = ? AND status = 'pending'")
@@ -556,10 +600,10 @@ export default {
     } else if (request.method === "POST" && /^\/api\/change-requests\/[^/]+\/(approve|reject)$/.test(url.pathname)) {
       const [, idPart, decision] = /^\/api\/change-requests\/([^/]+)\/(approve|reject)$/.exec(url.pathname)!;
       const id = decodeURIComponent(idPart);
-      const row = await env.DB.prepare("SELECT id, requester_id AS requesterId, kind, payload_json AS payloadJson, status FROM change_requests WHERE id = ?").bind(id)
-        .first<{ id: string; requesterId: string; kind: string; payloadJson: string; status: string }>();
+      const row = await env.DB.prepare("SELECT cr.id, cr.requester_id AS requesterId, u.email AS requesterEmail, cr.kind, cr.payload_json AS payloadJson, cr.status FROM change_requests cr JOIN users u ON u.id = cr.requester_id WHERE cr.id = ?").bind(id)
+        .first<{ id: string; requesterId: string; requesterEmail: string; kind: string; payloadJson: string; status: string }>();
       if (!row || row.status !== "pending") response = jsonError("Request not found or already reviewed", 404);
-      else if (decision === "approve" && row.requesterId === accessUser!.id) response = jsonError("Mentors cannot approve their own requests", 409);
+      else if (decision === "approve" && (row.requesterId === accessUser!.id || row.requesterEmail.trim().toLowerCase() === accessUser!.email.trim().toLowerCase())) response = jsonError("Mentors cannot approve their own requests", 409);
       else {
         try {
           const claim = await env.DB.prepare("UPDATE change_requests SET status = 'processing' WHERE id = ? AND status = 'pending'").bind(id).run();
@@ -590,7 +634,7 @@ export default {
         if (request.method === "PUT" && url.pathname === "/api/settings") {
           const body = await request.json() as Record<string, unknown>;
           if (!body || (!body.settings && !body.apply)) throw new Error("settings or apply is required");
-          if (body.settings !== undefined && (typeof body.settings !== "object" || body.settings === null || Array.isArray(body.settings))) throw new Error("settings must be an object");
+          if (body.settings !== undefined && !isSharedSettingsPatch(body.settings)) throw new Error("settings contains unsupported or invalid values");
           if (body.apply !== undefined && !parseSharedSettingsApply(body.apply)) throw new Error("Invalid apply settings");
           kind = "settings";
           const labels: Record<string, string> = {
@@ -618,6 +662,7 @@ export default {
           };
           const descriptions = Object.entries(changes).map(([key, change]) => `${labels[key] ?? key}: ${describeValue(key, change.before)} → ${describeValue(key, change.after)}`);
           for (const [key, change] of Object.entries(applyChanges)) descriptions.push(`${labels[key]}のサイト反映: ${change.before ? "有効" : "無効"} → ${change.after ? "有効" : "無効"}`);
+          if (descriptions.length === 0) throw new Error("変更内容がありません");
           summary = descriptions.length ? descriptions.join("・") : "共有設定を変更";
           payload = { settings, apply: body.apply, beforeSettings, beforeApply, changes, applyChanges, adminEdit: body.adminEdit === true };
         } else if (bannerKind && request.method === "DELETE") {
@@ -930,7 +975,9 @@ export default {
 
           if (!user) {
             response = jsonError("User not found", 404);
-          } else if (user.id === accessUser!.id && body.role !== "admin" && body.role !== "mentor") {
+          } else if (user.id === accessUser!.id && body.role === "mentor") {
+            response = jsonError("You cannot grant yourself mentor privileges", 403);
+          } else if (user.id === accessUser!.id && body.role !== "admin") {
             response = jsonError("You cannot remove your own administrator privileges", 409);
           } else if (user.role === body.role) {
             response = Response.json({ user });
@@ -1558,6 +1605,7 @@ export default {
             isUnused: Boolean(isUnused),
           })),
           canManageUsers: accessUser!.role === "admin" || accessUser!.role === "mentor",
+          canChangeUserRoles: accessUser!.role === "admin",
           canReviewRequests: accessUser!.role === "mentor",
         });
 
