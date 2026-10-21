@@ -218,6 +218,10 @@ function showNotice(message: string, isError = false) {
   noticeIsError.value = isError
 }
 
+function confirmRequestSubmission(action: string) {
+  return window.confirm(`${action}を送信しますか？`)
+}
+
 async function apiResponseError(response: Response): Promise<Error> {
   const body: unknown = await response.json().catch(() => null)
   const detail =
@@ -280,6 +284,11 @@ async function uploadBanner(kind: SharedBannerKind, event: Event) {
   if (!(input instanceof HTMLInputElement)) return
   const file = input.files?.[0]
   if (!file) return
+  const label = kind === 'horizontal' ? '横型バナーの変更申請' : '縦型バナーの変更申請'
+  if (!confirmRequestSubmission(label)) {
+    input.value = ''
+    return
+  }
   const previousPreviewUrl = pendingBannerPreviewUrls.value[kind]
   if (previousPreviewUrl) URL.revokeObjectURL(previousPreviewUrl)
   pendingBannerPreviewUrls.value[kind] = URL.createObjectURL(file)
@@ -317,6 +326,7 @@ async function removeBanner(kind: SharedBannerKind) {
 
 async function saveSettingsValues() {
   if (!sharedSettings.value || settingsValuesSaving.value) return
+  if (!confirmRequestSubmission('共有設定の変更申請')) return
   settingsValuesSaving.value = true
   try {
     const response = await fetch(`${API_BASE}/settings`, {
@@ -349,6 +359,7 @@ function addAdminCountdown(yearly: boolean) {
 
 async function saveSettingsPolicy() {
   if (settingsPolicySaving.value) return
+  if (!confirmRequestSubmission('反映対象の変更申請')) return
   settingsPolicySaving.value = true
   try {
     await saveSharedSettingsPolicy(settingsPolicy.value)
@@ -380,6 +391,7 @@ async function loadUsers() {
 
 async function addUser() {
   if (savingUser.value) return
+  if (!confirmRequestSubmission(`${newUserEmail.value.trim()} のユーザー登録`)) return
   savingUser.value = true
   showNotice('')
   try {
@@ -406,8 +418,13 @@ async function addUser() {
 }
 
 async function changeUserRole(user: ManagedUser, event: Event) {
-  const role = (event.target as HTMLSelectElement).value as ManagedUser['role']
+  const select = event.target as HTMLSelectElement
+  const role = select.value as ManagedUser['role']
   if (role === user.role) return
+  if (!confirmRequestSubmission(`${user.email} の権限変更`)) {
+    select.value = user.role
+    return
+  }
   try {
     const response = await fetch(`${API_BASE}/users/${encodeURIComponent(user.id)}`, {
       method: 'PATCH',
@@ -484,6 +501,7 @@ async function uploadVideo() {
     showNotice('動画名と動画ファイルを選択してください。', true)
     return
   }
+  if (!confirmRequestSubmission(`動画「${title}」のアップロード`)) return
 
   const formData = new FormData()
   formData.set('title', title)
