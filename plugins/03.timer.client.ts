@@ -12,8 +12,11 @@ export default defineNuxtPlugin((nuxtApp) => {
 
       if (timerState.value[0] === 0 && timerState.value[1] === 0 && timerState.value[2] === 0) {
         // タイマーが0になったらチャイムを鳴らす
-        timerAlertSource().value.volume = 1.0;
-        await timerAlertSource().value.play();
+        const canPlayDashboardAudio = nuxtApp.$router.currentRoute.value.path.replace(/\/+$/, '') === '';
+        if (canPlayDashboardAudio) {
+          timerAlertSource().value.volume = 1.0;
+          await timerAlertSource().value.play();
+        }
 
         // タイマーを停止
         isTimerActive().value = false;

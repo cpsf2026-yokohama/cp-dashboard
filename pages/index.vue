@@ -31,6 +31,7 @@ useHead({
 });
 
 const widthState = widthScreenSize();
+let dashboardAudioPrimer: ((event: MouseEvent) => void) | null = null
 
 type PlaybackSchedule = {
   scheduleId: string
@@ -156,7 +157,7 @@ onMounted(async () => {
 
   // 画面クリック後に行う、バックグラウンドで正常に動作するための対策
   // iOS / Safariでは、画面クリック後に各種権限を取得する必要がある模様
-  document.body.onclick = async () => {
+  dashboardAudioPrimer = async () => {
     if (!firstClick.value) {
       // バックグラウンドでの根本的な動作対策
       try {
@@ -198,9 +199,9 @@ onMounted(async () => {
       }
 
       firstClick.value = true;
-      document.body.onclick = null;
     }
   };
+  document.body.addEventListener('click', dashboardAudioPrimer, { once: true });
 
   // ウィンドウサイズを取得し適用
   widthState.value = window.innerWidth;
@@ -217,6 +218,10 @@ onMounted(async () => {
 });
 
 onUnmounted(() => {
+  if (dashboardAudioPrimer) {
+    document.body.removeEventListener('click', dashboardAudioPrimer)
+    dashboardAudioPrimer = null
+  }
   if (schedulePollTimer !== undefined)
     window.clearInterval(schedulePollTimer);
   if (playbackStartTimer !== undefined)

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import {
   DEFAULT_SHARED_SETTINGS_POLICY,
   SHARED_SETTING_KEYS,
@@ -13,6 +13,7 @@ import {
   type SharedSettings,
   type SharedSettingsPolicy,
 } from '../composables/useSharedSettings'
+import AdminDashboardPreview from '../components/admin/dashboard-preview.vue'
 
 type Video = {
   id: string
@@ -72,6 +73,8 @@ const settingsPolicySaving = ref(false)
 const sharedSettings = ref<SharedSettings | null>(null)
 const settingsValuesSaving = ref(false)
 const bannerInfo = ref<Record<SharedBannerKind, SharedBannerInfo | null>>({ horizontal: null, vertical: null })
+const pendingBannerPreviewUrls = ref<Record<SharedBannerKind, string | null>>({ horizontal: null, vertical: null })
+const showDashboardPreview = ref(false)
 const bannerUploading = ref<SharedBannerKind | null>(null)
 const bannerDeleting = ref<SharedBannerKind | null>(null)
 const settingLabels: Record<keyof SharedSettingsPolicy, string> = {
@@ -83,6 +86,12 @@ const settingLabels: Record<keyof SharedSettingsPolicy, string> = {
   isBannerVisible: '横型バナーの表示状態',
   isVerticalBanner: '縦型バナーの表示状態',
 }
+
+onBeforeUnmount(() => {
+  Object.values(pendingBannerPreviewUrls.value).forEach((url) => {
+    if (url) URL.revokeObjectURL(url)
+  })
+})
 
 watch(showAddSchedule, async (open) => {
   await nextTick()
@@ -258,12 +267,18 @@ async function uploadBanner(kind: SharedBannerKind, event: Event) {
   if (!(input instanceof HTMLInputElement)) return
   const file = input.files?.[0]
   if (!file) return
+  const previousPreviewUrl = pendingBannerPreviewUrls.value[kind]
+  if (previousPreviewUrl) URL.revokeObjectURL(previousPreviewUrl)
+  pendingBannerPreviewUrls.value[kind] = URL.createObjectURL(file)
   bannerUploading.value = kind
   try {
     await uploadSharedBanner(kind, file)
     bannerInfo.value = await loadSharedBanners()
     showNotice('バナーの変更を申請しました。メンターの承認後にサイトへ反映されます。')
   } catch (error) {
+    const failedPreviewUrl = pendingBannerPreviewUrls.value[kind]
+    if (failedPreviewUrl) URL.revokeObjectURL(failedPreviewUrl)
+    pendingBannerPreviewUrls.value[kind] = null
     showNotice(`バナーを保存できませんでした：${error instanceof Error ? error.message : '不明なエラー'}`, true)
   } finally {
     bannerUploading.value = null
@@ -847,6 +862,20 @@ function openSchedule() {
           </div>
           <p v-if="settingsPolicyLoading" class="state-message muted" role="status">共有設定を読み込み中...</p>
           <template v-else-if="sharedSettings">
+            <div class="admin-preview-toolbar">
+              <div><h3>画面プレビュー</h3><p class="help">入力中の設定がダッシュボードにどう表示されるか確認できます。</p></div>
+              <button class="button button-small" :aria-expanded="showDashboardPreview" @click="showDashboardPreview = !showDashboardPreview">
+                {{ showDashboardPreview ? 'プレビューを閉じる' : '表示を確認' }}
+              </button>
+            </div>
+            <AdminDashboardPreview
+              v-if="showDashboardPreview"
+              :settings="sharedSettings"
+              :horizontal-banner-url="bannerInfo.horizontal?.url ?? null"
+              :vertical-banner-url="bannerInfo.vertical?.url ?? null"
+              :pending-horizontal-banner-url="pendingBannerPreviewUrls.horizontal"
+              :pending-vertical-banner-url="pendingBannerPreviewUrls.vertical"
+            />
             <div class="settings-value-grid">
               <label class="check-field"><input v-model="sharedSettings.isChimeEnabled" type="checkbox"><span>チャイムを有効にする</span></label>
               <label class="check-field"><input v-model="sharedSettings.isPreChimeEnabled" type="checkbox"><span>予鈴を有効にする</span></label>
@@ -863,11 +892,11 @@ function openSchedule() {
                   { kind: 'vertical' as const, title: '縦型バナー', recommendation: '推奨 920 × 1600 px' },
                 ]" :key="item.kind" class="banner-management-card">
                   <div class="banner-preview">
-                    <img v-if="bannerInfo[item.kind]" :src="bannerInfo[item.kind]!.url" :alt="`${item.title}のプレビュー`">
+                    <img v-if="pendingBannerPreviewUrls[item.kind] || bannerInfo[item.kind]" :src="pendingBannerPreviewUrls[item.kind] || bannerInfo[item.kind]!.url" :alt="`${item.title}${pendingBannerPreviewUrls[item.kind] ? 'の申請画像' : ''}のプレビュー`">
                     <span v-else class="help">画像は未登録です</span>
                   </div>
                   <div class="section-heading">
-                    <div><h4>{{ item.title }}</h4><p class="help">{{ bannerInfo[item.kind] ? `${(bannerInfo[item.kind]!.size / (1024 * 1024)).toFixed(2)} MiB` : item.recommendation }}</p></div>
+                    <div><h4>{{ item.title }}</h4><p class="help">{{ pendingBannerPreviewUrls[item.kind] ? '今回の申請画像（この画面でプレビュー中）' : bannerInfo[item.kind] ? `${(bannerInfo[item.kind]!.size / (1024 * 1024)).toFixed(2)} MiB` : item.recommendation }}</p></div>
                     <button v-if="bannerInfo[item.kind]" class="button button-small button-danger" :disabled="bannerDeleting !== null || bannerUploading !== null" @click="void removeBanner(item.kind)">{{ bannerDeleting === item.kind ? '削除中...' : '画像を削除' }}</button>
                   </div>
                   <label class="field"><span>{{ bannerInfo[item.kind] ? '画像を差し替え' : '画像を追加' }}</span><input type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/avif" :disabled="bannerUploading !== null || bannerDeleting !== null" @change="uploadBanner(item.kind, $event)"></label>
@@ -1056,6 +1085,8 @@ h2 { font-size: 18px; font-weight: 600; line-height: 1.5; }
 .admin-setting-block { margin-top: 20px; padding-top: 18px; border-top: 1px solid var(--admin-border); }
 .admin-setting-block h3 { font-size: 15px; font-weight: 600; }
 .admin-setting-block h4 { font-size: 14px; font-weight: 600; }
+.admin-preview-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 12px 0; }
+.admin-preview-toolbar h3 { margin: 0 0 4px; font-size: 15px; font-weight: 600; }
 .banner-management-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 14px; }
 .banner-management-card { display: flex; flex-direction: column; gap: 10px; padding: 14px; border: 1px solid var(--admin-border); border-radius: 8px; }
 .banner-preview { display: flex; align-items: center; justify-content: center; min-height: 160px; overflow: hidden; border-radius: 6px; background: #f3f4f6; }
