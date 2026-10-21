@@ -1,6 +1,6 @@
 import { env, createExecutionContext, waitOnExecutionContext, SELF } from "cloudflare:test";
 import { describe, it, expect } from "vitest";
-import worker, { hasRoleForRoute, requiresAccessAuthentication, resolveAccessUser } from "../src/index";
+import worker, { expandPlaybackSchedules, hasRoleForRoute, requiresAccessAuthentication, resolveAccessUser } from "../src/index";
 import { onRequest as proxyApiRequest } from "../../../functions/api/[[path]]";
 
 const IncomingRequest = Request<unknown, IncomingRequestCfProperties>;
@@ -301,13 +301,29 @@ describe("Video API worker", () => {
     expect(hasRoleForRoute({ role: "admin" }, "GET", "/api/users")).toBe(true);
     expect(hasRoleForRoute({ role: "mentor" }, "GET", "/api/users")).toBe(true);
     expect(hasRoleForRoute({ role: "admin" }, "PATCH", "/api/users/user-1")).toBe(true);
-    expect(hasRoleForRoute({ role: "mentor" }, "PATCH", "/api/users/user-1")).toBe(false);
+    expect(hasRoleForRoute({ role: "mentor" }, "PATCH", "/api/users/user-1")).toBe(true);
     expect(hasRoleForRoute({ role: "producer" }, "PATCH", "/api/users/user-1")).toBe(false);
     expect(hasRoleForRoute({ role: "operator" }, "PATCH", "/api/users/user-1")).toBe(false);
-    expect(hasRoleForRoute({ role: "mentor" }, "POST", "/api/users")).toBe(false);
+    expect(hasRoleForRoute({ role: "mentor" }, "POST", "/api/users")).toBe(true);
     expect(hasRoleForRoute({ role: "producer" }, "GET", "/api/users")).toBe(false);
     expect(hasRoleForRoute({ role: "operator" }, "POST", "/api/users")).toBe(false);
     expect(requiresAccessAuthentication("PATCH", "/api/users/user-1")).toBe(true);
+  });
+
+  it("expands daily and weekly playback schedules only inside the playback window", () => {
+    const rows = [
+      { scheduleId: "daily", videoId: "video-1", title: "Daily", startsAt: "2030-01-01T10:00:00.000Z", recurrence: "daily", recurrenceUntil: "2030-01-04T23:59:59.999Z" },
+      { scheduleId: "weekly", videoId: "video-2", title: "Weekly", startsAt: "2030-01-01T11:00:00.000Z", recurrence: "weekly" },
+      { scheduleId: "once", videoId: "video-3", title: "Once", startsAt: "2030-01-02T12:00:00.000Z", recurrence: "none" },
+    ];
+
+    expect(expandPlaybackSchedules(rows, "2030-01-02T00:00:00.000Z", "2030-01-09T00:00:00.000Z")).toEqual([
+      { ...rows[0], scheduleId: "daily:2030-01-02T10:00:00.000Z", startsAt: "2030-01-02T10:00:00.000Z" },
+      { ...rows[0], scheduleId: "daily:2030-01-03T10:00:00.000Z", startsAt: "2030-01-03T10:00:00.000Z" },
+      { ...rows[0], scheduleId: "daily:2030-01-04T10:00:00.000Z", startsAt: "2030-01-04T10:00:00.000Z" },
+      { ...rows[1], scheduleId: "weekly:2030-01-08T11:00:00.000Z", startsAt: "2030-01-08T11:00:00.000Z" },
+      rows[2],
+    ]);
   });
 
   it("applies a settings change only after a different mentor approves it", async () => {

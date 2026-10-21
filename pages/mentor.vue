@@ -6,13 +6,29 @@ const loading = ref(true)
 const error = ref('')
 const busyId = ref('')
 const failedImages = ref(new Set<string>())
+const route = useRoute()
+const appBase = String(useRuntimeConfig().app.baseURL || '/').replace(/\/?$/, '/')
+
+function appPath(path: string) {
+  return `${appBase}${path.replace(/^\/+/, '')}`
+}
 
 async function loadRequests() {
   loading.value = true
   error.value = ''
   try {
     const response = await fetch(`${api}/change-requests`)
-    if (!response.ok) throw new Error(response.status === 403 ? 'メンター権限が必要です。' : `HTTP ${response.status}`)
+    if (response.status === 401 && route.query.accessRetry !== '1') {
+      window.location.replace(`${appPath('admin')}?returnTo=mentor&accessRetry=1`)
+      return
+    }
+    if (!response.ok) {
+      throw new Error(response.status === 403
+        ? 'メンター権限が必要です。'
+        : response.status === 401
+          ? '認証を確認できません。管理画面でログインし直してください。'
+          : `HTTP ${response.status}`)
+    }
     requests.value = (await response.json() as { requests: ChangeRequest[] }).requests
     failedImages.value = new Set()
   } catch (cause) {
@@ -104,7 +120,7 @@ onMounted(() => void loadRequests())
 <template>
   <main class="mentor-page">
     <header><div><p class="eyebrow">MENTOR REVIEW</p><h1>変更リクエスト</h1><p>承認されるまで、申請内容はサイトや再生端末に反映されません。</p></div><nav><a href="/admin">管理画面</a><button @click="void loadRequests()">再読み込み</button></nav></header>
-    <p v-if="error" class="error" role="alert">{{ error }}</p>
+    <p v-if="error" class="error" role="alert">{{ error }} <a v-if="error.includes('認証')" :href="appPath('admin')">管理画面で認証</a></p>
     <p v-if="loading" class="empty" role="status">申請を読み込み中...</p>
     <p v-else-if="!error && requests.length === 0" class="empty">承認待ちの申請はありません。</p>
     <section v-else-if="!error && requests.length > 0" class="request-list" aria-label="承認待ち">

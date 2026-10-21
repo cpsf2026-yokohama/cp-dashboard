@@ -138,10 +138,11 @@ export function hasRoleForRoute(user: Pick<ApiUser, "role">, method: string, pat
     return user.role === "admin" || user.role === "mentor";
   }
 
-  // Mentor approval authority does not include changing account roles.
+  // Mentors can manage ordinary accounts; privileged role changes are checked
+  // against the request body and target user in the handlers below.
   if ((method === "POST" && pathname === "/api/users") ||
       (method === "PATCH" && /^\/api\/users\/[^/]+$/.test(pathname))) {
-    return user.role === "admin";
+    return user.role === "admin" || user.role === "mentor";
   }
 
   if (method === "POST" && pathname === "/api/videos") {
@@ -369,6 +370,43 @@ function isUserRole(value: unknown): value is UserRole {
   return value === "admin" || value === "producer" || value === "operator" || value === "mentor";
 }
 
+type PlaybackScheduleRow = {
+  scheduleId: string;
+  videoId: string;
+  title: string;
+  startsAt: string;
+  recurrence?: string;
+  recurrenceUntil?: string | null;
+};
+
+export function expandPlaybackSchedules(rows: PlaybackScheduleRow[], windowStart: string, windowEnd: string) {
+  const windowStartMs = Date.parse(windowStart);
+  const windowEndMs = Date.parse(windowEnd);
+  if (!Number.isFinite(windowStartMs) || !Number.isFinite(windowEndMs) || windowEndMs < windowStartMs) return [];
+
+  return rows.flatMap((item) => {
+    const recurrence = item.recurrence ?? "none";
+    if (recurrence === "none") return [item];
+    if (recurrence !== "daily" && recurrence !== "weekly") return [];
+
+    const intervalMs = recurrence === "daily" ? 86_400_000 : 604_800_000;
+    const firstStart = Date.parse(item.startsAt);
+    const until = item.recurrenceUntil ? Date.parse(item.recurrenceUntil) : Number.POSITIVE_INFINITY;
+    if (!Number.isFinite(firstStart) || Number.isNaN(until)) return [];
+
+    let occurrence = Math.max(0, Math.ceil((windowStartMs - firstStart) / intervalMs));
+    const occurrences: Array<{ scheduleId: string; videoId: string; title: string; startsAt: string }> = [];
+    let startsAt = firstStart + occurrence * intervalMs;
+    while (startsAt <= windowEndMs && startsAt <= until) {
+      const occurrenceTime = new Date(startsAt).toISOString();
+      occurrences.push({ ...item, scheduleId: `${item.scheduleId}:${occurrenceTime}`, startsAt: occurrenceTime });
+      occurrence += 1;
+      startsAt = firstStart + occurrence * intervalMs;
+    }
+    return occurrences;
+  });
+}
+
 function isDashboardMutation(method: string, pathname: string): boolean {
   return (method === "PUT" && pathname === "/api/settings") ||
     ((method === "PUT" || method === "DELETE") && /^\/api\/banners\/(horizontal|vertical)$/.test(pathname)) ||
@@ -403,16 +441,20 @@ async function applyChangeRequest(env: Env, reviewer: string, row: { id: string;
     }
     case "schedule.create": {
       const videoId = String(payload.videoId); const startsAt = String(payload.startsAt);
+      const recurrence = String(payload.recurrence ?? "none");
+      const recurrenceUntil = typeof payload.recurrenceUntil === "string" ? payload.recurrenceUntil : null;
       const video = await env.DB.prepare("SELECT id FROM videos WHERE id = ?").bind(videoId).first();
       if (!video) throw new Error("Video no longer exists");
-      const existing = await env.DB.prepare("SELECT video_id AS videoId, starts_at AS startsAt FROM schedules WHERE id = ?")
-        .bind(String(payload.id)).first<{ videoId: string; startsAt: string }>();
+      const existing = await env.DB.prepare("SELECT video_id AS videoId, starts_at AS startsAt, recurrence, recurrence_until AS recurrenceUntil FROM schedules WHERE id = ?")
+        .bind(String(payload.id)).first<{ videoId: string; startsAt: string; recurrence?: string; recurrenceUntil?: string | null }>();
       if (existing) {
-        if (existing.videoId !== videoId || existing.startsAt !== startsAt) throw new Error("Schedule ID is already used by another schedule");
+        if (existing.videoId !== videoId || existing.startsAt !== startsAt || (existing.recurrence ?? "none") !== recurrence || (existing.recurrenceUntil ?? null) !== recurrenceUntil) {
+          throw new Error("Schedule ID is already used by another schedule");
+        }
         break;
       }
-      await env.DB.prepare("INSERT INTO schedules (id, video_id, starts_at, created_by) VALUES (?, ?, ?, ?)")
-        .bind(String(payload.id), videoId, startsAt, row.requesterId).run();
+      await env.DB.prepare("INSERT INTO schedules (id, video_id, starts_at, created_by, recurrence, recurrence_until) VALUES (?, ?, ?, ?, ?, ?)")
+        .bind(String(payload.id), videoId, startsAt, row.requesterId, recurrence, recurrenceUntil).run();
       break;
     }
     case "schedule.delete": {
@@ -679,9 +721,19 @@ export default {
           const body = await request.json() as Record<string, unknown>;
           const startsAt = new Date(String(body.startsAt));
           if (typeof body.videoId !== "string" || Number.isNaN(startsAt.getTime())) throw new Error("videoId and valid startsAt are required");
+          const recurrence = body.recurrence ?? "none";
+          if (recurrence !== "none" && recurrence !== "daily" && recurrence !== "weekly") throw new Error("Invalid recurrence");
+          let recurrenceUntil: string | null = null;
+          if (body.recurrenceUntil !== undefined && body.recurrenceUntil !== null && body.recurrenceUntil !== "") {
+            const until = new Date(String(body.recurrenceUntil));
+            if (Number.isNaN(until.getTime()) || until.getTime() <= startsAt.getTime()) throw new Error("recurrenceUntil must be after startsAt");
+            recurrenceUntil = until.toISOString();
+          }
+          if (recurrence === "none" && recurrenceUntil) throw new Error("recurrenceUntil requires a repeating schedule");
           const video = await env.DB.prepare("SELECT id, title FROM videos WHERE id = ?").bind(body.videoId).first<{ id: string; title?: string }>();
           if (!video) throw new Error("Video not found");
-          kind = "schedule.create"; summary = `予定を追加: ${video.title ?? "動画"}`; payload = { videoId: body.videoId, videoTitle: video.title, startsAt: startsAt.toISOString(), id: crypto.randomUUID() };
+          const repeatLabel = recurrence === "daily" ? "（毎日）" : recurrence === "weekly" ? "（毎週）" : "";
+          kind = "schedule.create"; summary = `予定を追加${repeatLabel}: ${video.title ?? "動画"}`; payload = { videoId: body.videoId, videoTitle: video.title, startsAt: startsAt.toISOString(), recurrence, recurrenceUntil, id: crypto.randomUUID() };
         } else if (request.method === "DELETE" && /^\/api\/schedules\/[^/]+$/.test(url.pathname)) {
           const id = decodeURIComponent(url.pathname.slice("/api/schedules/".length));
           const schedule = await env.DB.prepare("SELECT videos.title AS title, schedules.starts_at AS startsAt FROM schedules JOIN videos ON videos.id = schedules.video_id WHERE schedules.id = ?").bind(id).first<{ title?: string; startsAt?: string }>();
@@ -929,6 +981,8 @@ export default {
           const role = body.role;
           if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 254 || !isUserRole(role)) {
             response = jsonError("A valid email and role are required", 400);
+          } else if (accessUser!.role === "mentor" && role !== "producer" && role !== "operator") {
+            response = jsonError("Mentors can only create producer or operator accounts", 403);
           } else {
             const existing = await env.DB.prepare(`
               SELECT id FROM users WHERE lower(email) = lower(?) LIMIT 1
@@ -975,6 +1029,12 @@ export default {
 
           if (!user) {
             response = jsonError("User not found", 404);
+          } else if (accessUser!.role === "mentor" && (
+            user.id === accessUser!.id ||
+            (user.role !== "producer" && user.role !== "operator") ||
+            (body.role !== "producer" && body.role !== "operator")
+          )) {
+            response = jsonError("Mentors can only manage other producer or operator accounts", 403);
           } else if (user.id === accessUser!.id && body.role === "mentor") {
             response = jsonError("You cannot grant yourself mentor privileges", 403);
           } else if (user.id === accessUser!.id && body.role !== "admin") {
@@ -1064,30 +1124,31 @@ export default {
 
             v.title AS title,
 
-            s.starts_at AS startsAt
+            s.starts_at AS startsAt,
+
+            s.recurrence AS recurrence,
+
+            s.recurrence_until AS recurrenceUntil
 
           FROM schedules s
 
           JOIN videos v ON v.id = s.video_id
 
-          WHERE s.starts_at > ?
+          WHERE (s.recurrence = 'none' AND s.starts_at > ? AND s.starts_at <= ?)
 
-            AND s.starts_at <= ?
+            OR (s.recurrence IN ('daily', 'weekly') AND (s.recurrence_until IS NULL OR s.recurrence_until > ?))
 
           ORDER BY s.starts_at ASC
 
         `)
 
-          .bind(windowStart, windowEnd)
+          .bind(windowStart, windowEnd, windowStart)
 
           .all();
 
         response = Response.json({
-
           serverTime: now.toISOString(),
-
-          schedules: result.results,
-
+          schedules: expandPlaybackSchedules(result.results, windowStart, windowEnd),
         });
 
       } catch (error) {
@@ -1120,7 +1181,11 @@ export default {
 
             s.starts_at AS startsAt,
 
-            s.created_by AS createdBy
+            s.created_by AS createdBy,
+
+            s.recurrence AS recurrence,
+
+            s.recurrence_until AS recurrenceUntil
 
           FROM schedules s
 
@@ -1604,7 +1669,8 @@ export default {
             isUnused: Boolean(isUnused),
           })),
           canManageUsers: accessUser!.role === "admin" || accessUser!.role === "mentor",
-          canChangeUserRoles: accessUser!.role === "admin",
+          canChangeUserRoles: accessUser!.role === "admin" || accessUser!.role === "mentor",
+          canAssignPrivilegedRoles: accessUser!.role === "admin",
           canReviewRequests: accessUser!.role === "mentor",
         });
 

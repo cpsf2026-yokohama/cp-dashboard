@@ -38,6 +38,8 @@ type ApiSchedule = {
   title: string
   startsAt: string
   createdBy: string
+  recurrence?: 'none' | 'daily' | 'weekly'
+  recurrenceUntil?: string | null
 }
 
 type Schedule = ApiSchedule & {
@@ -47,10 +49,12 @@ type Schedule = ApiSchedule & {
 }
 
 const API_BASE = useVideoApiBase()
+const appBase = String(useRuntimeConfig().app.baseURL || '/').replace(/\/?$/, '/')
 
 const activeTab = ref<'overview' | 'videos' | 'schedule' | 'users' | 'settings'>('overview')
 const canManageUsers = ref(false)
 const canChangeUserRoles = ref(false)
+const canAssignPrivilegedRoles = ref(false)
 const canReviewRequests = ref(false)
 const managedUsers = ref<ManagedUser[]>([])
 const usersLoading = ref(false)
@@ -138,6 +142,8 @@ function keepScheduleFocus(event: KeyboardEvent) {
 const selectedVideo = ref('')
 const selectedDate = ref(new Date().toLocaleDateString('sv-SE'))
 const selectedTime = ref('15:00')
+const scheduleRecurrence = ref<'none' | 'daily' | 'weekly'>('none')
+const scheduleRecurrenceUntil = ref('')
 const notice = ref('')
 const noticeIsError = ref(false)
 
@@ -201,6 +207,12 @@ function videoTitle(id: string) {
     ?? '不明な動画'
 }
 
+function scheduleRecurrenceLabel(item: ApiSchedule) {
+  if (item.recurrence === 'daily') return '毎日'
+  if (item.recurrence === 'weekly') return '毎週'
+  return '単発'
+}
+
 function showNotice(message: string, isError = false) {
   notice.value = message
   noticeIsError.value = isError
@@ -226,10 +238,11 @@ async function loadVideos() {
       throw new Error(`HTTP ${response.status}`)
     }
 
-    const data: { videos: Video[], canManageUsers?: boolean, canChangeUserRoles?: boolean, canReviewRequests?: boolean } = await response.json()
+    const data: { videos: Video[], canManageUsers?: boolean, canChangeUserRoles?: boolean, canAssignPrivilegedRoles?: boolean, canReviewRequests?: boolean } = await response.json()
     videos.value = data.videos
     canManageUsers.value = data.canManageUsers === true
     canChangeUserRoles.value = data.canChangeUserRoles === true
+    canAssignPrivilegedRoles.value = data.canAssignPrivilegedRoles === true
     canReviewRequests.value = data.canReviewRequests === true
 
     if (
@@ -448,6 +461,13 @@ async function loadAll() {
 
 void loadAll()
 
+const route = useRoute()
+onMounted(() => {
+  if (route.query.returnTo === 'mentor' && route.query.accessRetry === '1') {
+    window.location.replace(`${appBase}mentor?accessRetry=1`)
+  }
+})
+
 function selectUploadFile(event: Event) {
   const input = event.target
   uploadFile.value = input instanceof HTMLInputElement
@@ -562,6 +582,15 @@ async function addSchedule() {
   }
 
   const startsAt = localDateTime.toISOString()
+  let recurrenceUntil: string | null = null
+  if (scheduleRecurrence.value !== 'none' && scheduleRecurrenceUntil.value) {
+    const untilDateTime = new Date(`${scheduleRecurrenceUntil.value}T23:59:59.999`)
+    if (Number.isNaN(untilDateTime.getTime()) || untilDateTime.getTime() <= localDateTime.getTime()) {
+      showNotice('繰り返し終了日は開始日より後の日付を指定してください。', true)
+      return
+    }
+    recurrenceUntil = untilDateTime.toISOString()
+  }
 
   const conflict = schedules.value.some(
     item => item.startsAt === startsAt,
@@ -571,6 +600,14 @@ async function addSchedule() {
     showNotice('同じ時刻に予約があります。時刻を変更してください。', true)
     return
   }
+
+  const recurrenceLabel = scheduleRecurrence.value === 'daily'
+    ? '毎日'
+    : scheduleRecurrence.value === 'weekly' ? '毎週' : '今回のみ'
+  const untilLabel = recurrenceUntil
+    ? `（${scheduleRecurrenceUntil.value}まで）`
+    : scheduleRecurrence.value === 'none' ? '' : '（終了日なし）'
+  if (!window.confirm(`${videoTitle(selectedVideo.value)}を${formatDateTime(startsAt)}から${recurrenceLabel}${untilLabel}で再生する予定を申請しますか？`)) return
 
   scheduleSaving.value = true
 
@@ -583,6 +620,8 @@ async function addSchedule() {
       body: JSON.stringify({
         videoId: selectedVideo.value,
         startsAt,
+        recurrence: scheduleRecurrence.value,
+        recurrenceUntil,
       }),
     })
 
@@ -614,7 +653,7 @@ async function addSchedule() {
     }
 
     showAddSchedule.value = false
-    showNotice('スケジュールの追加を申請しました。承認後に再生予定へ反映されます。')
+    showNotice(`${recurrenceLabel}のスケジュール追加を申請しました。承認後に再生予定へ反映されます。`)
   } catch (error) {
     console.error('Failed to add schedule:', error)
 
@@ -688,6 +727,8 @@ async function cancelSchedule(id: string) {
 
 function openSchedule() {
   showNotice('')
+  scheduleRecurrence.value = 'none'
+  scheduleRecurrenceUntil.value = ''
   showAddSchedule.value = true
 }
 </script>
@@ -767,7 +808,7 @@ function openSchedule() {
             <div v-for="item in schedules.slice(0, 5)" :key="item.id" class="schedule-row">
               <time :datetime="item.startsAt">{{ formatDateTime(item.startsAt) }}</time>
               <span class="item-title">{{ videoTitle(item.videoId) }}</span>
-              <span class="badge">{{ item.status }}</span>
+              <span class="badge">{{ item.status }} · {{ scheduleRecurrenceLabel(item) }}</span>
             </div>
           </div>
         </section>
@@ -841,7 +882,7 @@ function openSchedule() {
               <time :datetime="item.startsAt">{{ formatDateTime(item.startsAt) }}</time>
               <span class="item-title">{{ videoTitle(item.videoId) }}</span>
               <div class="row-actions">
-                <span class="badge">{{ item.status }}</span>
+                <span class="badge">{{ item.status }} · {{ scheduleRecurrenceLabel(item) }}</span>
                 <button class="button button-small" :aria-label="`${videoTitle(item.videoId)}の予約をキャンセル`" @click="cancelSchedule(item.id)">キャンセル</button>
               </div>
             </div>
@@ -958,7 +999,7 @@ function openSchedule() {
             <label class="field"><span>メールアドレス</span><input v-model="newUserEmail" type="email" required maxlength="254" placeholder="メンバーのメールアドレス"></label>
             <label class="field">
               <span>役割</span>
-              <select v-model="newUserRole"><option value="producer">動画制作担当</option><option value="operator">運用担当</option><option value="admin">管理者</option><option value="mentor">メンター（管理者＋承認）</option></select>
+              <select v-model="newUserRole"><option value="producer">動画制作担当</option><option value="operator">運用担当</option><option v-if="canAssignPrivilegedRoles" value="admin">管理者</option><option v-if="canAssignPrivilegedRoles" value="mentor">メンター（管理者＋承認）</option></select>
             </label>
             <button :disabled="savingUser" class="button button-primary">{{ savingUser ? '登録中...' : '登録' }}</button>
           </form>
@@ -971,7 +1012,7 @@ function openSchedule() {
           <div v-else class="user-list">
             <div v-for="user in managedUsers" :key="user.id" class="user-row">
               <span class="item-title">{{ user.email }}</span>
-              <select v-if="canChangeUserRoles" :value="user.role" :aria-label="`${user.email}の役割`" @change="changeUserRole(user, $event)"><option value="producer">動画制作担当</option><option value="operator">運用担当</option><option value="admin">管理者</option><option value="mentor">メンター（管理者＋承認）</option></select>
+              <select v-if="canChangeUserRoles && (canAssignPrivilegedRoles || user.role === 'producer' || user.role === 'operator')" :value="user.role" :aria-label="`${user.email}の役割`" @change="changeUserRole(user, $event)"><option value="producer">動画制作担当</option><option value="operator">運用担当</option><option v-if="canAssignPrivilegedRoles" value="admin">管理者</option><option v-if="canAssignPrivilegedRoles" value="mentor">メンター（管理者＋承認）</option></select>
               <span v-else class="item-meta">{{ user.role }}</span>
             </div>
             <p v-if="!managedUsers.length" class="state-message muted">ユーザーがいません。</p>
@@ -1001,7 +1042,9 @@ function openSchedule() {
           <label class="field"><span>日付</span><input v-model="selectedDate" type="date" required :disabled="scheduleSaving"></label>
           <label class="field"><span>開始時刻</span><input v-model="selectedTime" type="time" required :disabled="scheduleSaving"></label>
         </div>
-        <p class="help playback-help">開始時刻に、メインページを開いている端末で全画面再生します。ブラウザーによっては、最初に再生操作が必要です。</p>
+        <label class="field"><span>繰り返し</span><select v-model="scheduleRecurrence" :disabled="scheduleSaving"><option value="none">今回のみ</option><option value="daily">毎日</option><option value="weekly">毎週（同じ曜日）</option></select></label>
+        <label v-if="scheduleRecurrence !== 'none'" class="field"><span>繰り返し終了日（任意）</span><input v-model="scheduleRecurrenceUntil" type="date" :min="selectedDate" :disabled="scheduleSaving"></label>
+        <p class="help playback-help">開始時刻に、メインページを開いている端末で全画面再生します。繰り返しは毎日または同じ曜日の毎週です。終了日を空欄にすると継続します。ブラウザーによっては、最初に再生操作が必要です。</p>
         <div class="dialog-actions">
           <button type="button" :disabled="scheduleSaving" class="button" @click="showAddSchedule = false">戻る</button>
           <button type="submit" :disabled="scheduleSaving || videos.length === 0" class="button button-primary">{{ scheduleSaving ? '保存中...' : '予定を追加' }}</button>
