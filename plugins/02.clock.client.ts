@@ -22,6 +22,7 @@ export default defineNuxtPlugin((nuxtApp) => {
       // チャイムの有効/無効
       const isChimeEnabledState = isChimeEnabled();
       const isPreChimeEnabledState = isPreChimeEnabled();
+      const canPlayChime = nuxtApp.$router.currentRoute.value.path.replace(/\/+$/, '') === '';
 
       if (isChimeEnabledState.value) {
         // 現在のチャイムの鳴動状況を取得
@@ -45,13 +46,13 @@ export default defineNuxtPlugin((nuxtApp) => {
         userChimeTimesState.forEach((cT) => {
           if (now.format("HH:mm") === cT.time && cT.chime && !chimePlayedState.get(cT.time)) {
             // チャイムを鳴らす
-            if (isChimeEnabledState.value) {
+            if (canPlayChime && isChimeEnabledState.value) {
               chimeSource().value.play();
             }
             chimePlayedState.set(cT.time, true);
           } else if (now.add(1, 'minute').format("HH:mm") === dayjs().hour(parseInt(cT.time.split(":")[0])).minute(parseInt(cT.time.split(":")[1])).format("HH:mm") && cT.preChime && !preChimePlayedState.get(cT.time)) {
             // 予鈴を鳴らす
-            if (isPreChimeEnabledState.value) {
+            if (canPlayChime && isPreChimeEnabledState.value) {
               preChimeSource().value.play();
             }
             preChimePlayedState.set(cT.time, true);
