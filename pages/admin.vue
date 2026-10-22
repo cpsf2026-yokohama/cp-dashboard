@@ -56,6 +56,7 @@ const canManageUsers = ref(false)
 const canChangeUserRoles = ref(false)
 const canAssignPrivilegedRoles = ref(false)
 const canReviewRequests = ref(false)
+const canViewRequests = ref(false)
 const managedUsers = ref<ManagedUser[]>([])
 const usersLoading = ref(false)
 const usersError = ref('')
@@ -250,12 +251,13 @@ async function loadVideos() {
       throw new Error(`HTTP ${response.status}`)
     }
 
-    const data: { videos: Video[], canManageUsers?: boolean, canChangeUserRoles?: boolean, canAssignPrivilegedRoles?: boolean, canReviewRequests?: boolean } = await response.json()
+    const data: { videos: Video[], canManageUsers?: boolean, canChangeUserRoles?: boolean, canAssignPrivilegedRoles?: boolean, canReviewRequests?: boolean, canViewRequests?: boolean } = await response.json()
     videos.value = data.videos
     canManageUsers.value = data.canManageUsers === true
     canChangeUserRoles.value = data.canChangeUserRoles === true
     canAssignPrivilegedRoles.value = data.canAssignPrivilegedRoles === true
     canReviewRequests.value = data.canReviewRequests === true
+    canViewRequests.value = data.canViewRequests === true
 
     if (
       !selectedVideo.value
@@ -777,7 +779,7 @@ function openSchedule() {
       </header>
 
       <nav class="admin-tabs" aria-label="管理メニュー">
-        <a v-if="canReviewRequests" class="button" href="/mentor">承認リクエスト</a>
+        <a v-if="canViewRequests" class="button" href="/mentor">{{ canReviewRequests ? '承認リクエスト' : '申請一覧' }}</a>
         <template
           v-for="tab in [
             { id: 'overview', label: '概要' },

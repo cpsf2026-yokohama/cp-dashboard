@@ -127,8 +127,8 @@ export function requiresAccessAuthentication(method: string, pathname: string): 
 }
 
 export function hasRoleForRoute(user: Pick<ApiUser, "role">, method: string, pathname: string): boolean {
-  if (method === "GET" && pathname === "/api/change-requests") return user.role === "mentor";
-  if (method === "GET" && /^\/api\/change-requests\/[^/]+\/preview$/.test(pathname)) return user.role === "mentor";
+  if (method === "GET" && pathname === "/api/change-requests") return user.role === "admin" || user.role === "mentor";
+  if (method === "GET" && /^\/api\/change-requests\/[^/]+\/preview$/.test(pathname)) return user.role === "admin" || user.role === "mentor";
   if (method === "POST" && /^\/api\/change-requests\/[^/]+\/(approve|reject)$/.test(pathname)) return user.role === "mentor";
   if (
     (method === "PUT" && pathname === "/api/settings") ||
@@ -710,7 +710,7 @@ export default {
           else if (Object.keys(requested).length) summary = "共有設定の申請（変更前の履歴なし）";
         }
         return { ...row, isMine: row.requesterId === accessUser!.id || String(row.requesterEmail).trim().toLowerCase() === accessUser!.email.trim().toLowerCase(), summary, payloadJson: undefined, payload };
-      }) });
+      }), canReview: accessUser!.role === "mentor" });
     } else if (request.method === "GET" && /^\/api\/change-requests\/[^/]+\/preview$/.test(url.pathname)) {
       const id = decodeURIComponent(url.pathname.split("/")[3]);
       const row = await env.DB.prepare("SELECT kind, payload_json AS payloadJson FROM change_requests WHERE id = ? AND status = 'pending'")
@@ -1785,6 +1785,7 @@ export default {
           canChangeUserRoles: accessUser!.role === "admin" || accessUser!.role === "mentor",
           canAssignPrivilegedRoles: accessUser!.role === "admin",
           canReviewRequests: accessUser!.role === "mentor",
+          canViewRequests: accessUser!.role === "admin" || accessUser!.role === "mentor",
         });
 
       } catch (error) {

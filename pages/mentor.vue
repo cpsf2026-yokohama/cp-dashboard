@@ -2,6 +2,7 @@
 type ChangeRequest = { id: string; kind: string; summary: string; payload: Record<string, unknown>; requesterEmail: string; createdAt: string; isMine: boolean }
 const api = useVideoApiBase()
 const requests = ref<ChangeRequest[]>([])
+const canReview = ref(false)
 const loading = ref(true)
 const error = ref('')
 const busyId = ref('')
@@ -24,12 +25,14 @@ async function loadRequests() {
     }
     if (!response.ok) {
       throw new Error(response.status === 403
-        ? 'メンター権限が必要です。'
+        ? '申請一覧を表示する権限が必要です。'
         : response.status === 401
           ? '認証を確認できません。管理画面でログインし直してください。'
           : `HTTP ${response.status}`)
     }
-    requests.value = (await response.json() as { requests: ChangeRequest[] }).requests
+    const data = await response.json() as { requests: ChangeRequest[]; canReview?: boolean }
+    requests.value = data.requests
+    canReview.value = data.canReview === true
     failedImages.value = new Set()
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : '申請を読み込めませんでした。'
@@ -38,6 +41,7 @@ async function loadRequests() {
 }
 
 async function decide(item: ChangeRequest, action: 'approve' | 'reject') {
+  if (!canReview.value) return
   if (!window.confirm(`「${item.summary}」を${action === 'approve' ? '承認して反映' : '却下'}しますか？`)) return
   busyId.value = item.id; error.value = ''
   try {
@@ -119,10 +123,10 @@ onMounted(() => void loadRequests())
 
 <template>
   <main class="mentor-page">
-    <header><div><p class="eyebrow">MENTOR REVIEW</p><h1>変更リクエスト</h1><p>承認されるまで、申請内容はサイトや再生端末に反映されません。</p></div><nav><a href="/admin">管理画面</a><button @click="void loadRequests()">再読み込み</button></nav></header>
+    <header><div><p class="eyebrow">MENTOR REVIEW</p><h1>変更リクエスト</h1><p>{{ canReview ? '承認されるまで、申請内容はサイトや再生端末に反映されません。' : '申請待ちの内容を確認できます。自分の申請は取り消せます。承認・却下はできません。' }}</p></div><nav><a href="/admin">管理画面</a><button @click="void loadRequests()">再読み込み</button></nav></header>
     <p v-if="error" class="error" role="alert">{{ error }} <a v-if="error.includes('認証')" :href="appPath('admin')">管理画面で認証</a></p>
     <p v-if="loading" class="empty" role="status">申請を読み込み中...</p>
-    <p v-else-if="!error && requests.length === 0" class="empty">承認待ちの申請はありません。</p>
+    <p v-else-if="!error && requests.length === 0" class="empty">申請待ちはありません。</p>
     <section v-else-if="!error && requests.length > 0" class="request-list" aria-label="承認待ち">
       <article v-for="item in requests" :key="item.id" class="request-card">
         <div class="request-header"><div><h2>{{ item.summary }}</h2><p>{{ item.requesterEmail }} · {{ formatDate(item.createdAt) }}</p></div><span>{{ kindLabel(item.kind) }}</span></div>
@@ -132,7 +136,7 @@ onMounted(() => void loadRequests())
           <figure><figcaption>変更後</figcaption><img v-if="item.kind === 'banner.upload' && !failedImages.has(`${item.id}:pending`)" :src="pendingBannerUrl(item)" :alt="`${bannerKind(item) === 'horizontal' ? '横' : '縦'}バナーの申請画像`" @error="hideUnavailableImage($event, `${item.id}:pending`)"><p v-else-if="item.kind === 'banner.upload'" class="image-result">申請画像を読み込めません</p><p v-else class="image-result">画像なし（削除）</p></figure>
         </div>
         <details v-if="details(item).length" open><summary>申請内容</summary><dl><template v-for="([label, value], index) in details(item)" :key="`${label}-${index}`"><dt>{{ label }}</dt><dd>{{ value }}</dd></template></dl></details>
-        <div class="actions"><template v-if="item.isMine"><button class="reject" :disabled="busyId !== ''" @click="void cancel(item)">{{ busyId === item.id ? '処理中...' : '自分の申請を取り消す' }}</button></template><template v-else><button class="reject" :disabled="busyId !== ''" @click="void decide(item, 'reject')">却下</button><button class="approve" :disabled="busyId !== ''" @click="void decide(item, 'approve')">{{ busyId === item.id ? '処理中...' : '承認して反映' }}</button></template></div>
+        <div class="actions"><template v-if="item.isMine"><button class="reject" :disabled="busyId !== ''" @click="void cancel(item)">{{ busyId === item.id ? '処理中...' : '自分の申請を取り消す' }}</button></template><template v-else-if="canReview"><button class="reject" :disabled="busyId !== ''" @click="void decide(item, 'reject')">却下</button><button class="approve" :disabled="busyId !== ''" @click="void decide(item, 'approve')">{{ busyId === item.id ? '処理中...' : '承認して反映' }}</button></template></div>
       </article>
     </section>
   </main>
