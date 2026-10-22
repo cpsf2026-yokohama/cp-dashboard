@@ -267,7 +267,7 @@ onUnmounted(() => {
     </div>
 
     <!-- 小画面デバイスの表示　-->
-    <div v-if="widthState <= 1280" class="min-h-[100dvh] min-w-full flex flex-col text-center mb-2">
+    <div v-if="widthState < 1280" class="min-h-[100dvh] min-w-full flex flex-col text-center mb-2">
       <div class="navbar bg-neutral">
         <div class="navbar-start">
           <button class="btn" onclick="window.location.replace(window.location.href)">

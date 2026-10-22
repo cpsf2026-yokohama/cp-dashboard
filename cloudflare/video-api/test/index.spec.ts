@@ -483,6 +483,7 @@ describe("Video API worker", () => {
               : sql.includes("SELECT video_id AS videoId") && scheduleAlreadyInserted ? { videoId: "video-1", startsAt: "2030-01-01T00:00:00.000Z" }
               : sql.includes("FROM videos") ? { id: "video-1" }
                 : null,
+          all: async () => ({ results: [] }),
           run: async () => { writes.push({ sql, values }); if (sql.includes("INSERT INTO schedules")) scheduleAlreadyInserted = true; return { success: true, meta: { changes: 1 } }; },
         };
         return statement;
@@ -621,6 +622,7 @@ describe("Video API worker", () => {
               : sql.includes("FROM videos")
                 ? { id: "video-1" }
                 : null,
+          all: async () => ({ results: [] }),
           run: async () => {
             if (sql.includes("INSERT INTO audit_logs")) {
               auditRows.push({ sql, values });

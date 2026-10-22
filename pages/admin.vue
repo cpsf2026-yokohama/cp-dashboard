@@ -139,8 +139,16 @@ function keepScheduleFocus(event: KeyboardEvent) {
     first.focus()
   }
 }
+function localDateInputValue(date = new Date()) {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
 const selectedVideo = ref('')
-const selectedDate = ref(new Date().toLocaleDateString('sv-SE'))
+const todayDate = ref(localDateInputValue())
+const selectedDate = ref(todayDate.value)
 const selectedTime = ref('15:00')
 const scheduleRecurrence = ref<'none' | 'daily' | 'weekly'>('none')
 const scheduleRecurrenceUntil = ref('')
@@ -598,6 +606,10 @@ async function addSchedule() {
     showNotice('日付または時刻が正しくありません。', true)
     return
   }
+  if (localDateTime.getTime() <= Date.now()) {
+    showNotice('過去の日時は予約できません。未来の時刻を指定してください。', true)
+    return
+  }
 
   const startsAt = localDateTime.toISOString()
   let recurrenceUntil: string | null = null
@@ -745,6 +757,8 @@ async function cancelSchedule(id: string) {
 
 function openSchedule() {
   showNotice('')
+  todayDate.value = localDateInputValue()
+  if (selectedDate.value < todayDate.value) selectedDate.value = todayDate.value
   scheduleRecurrence.value = 'none'
   scheduleRecurrenceUntil.value = ''
   showAddSchedule.value = true
@@ -1057,7 +1071,7 @@ function openSchedule() {
           <span v-if="videosError" class="help error">{{ videosError }}</span>
         </label>
         <div class="date-time-fields">
-          <label class="field"><span>日付</span><input v-model="selectedDate" type="date" required :disabled="scheduleSaving"></label>
+          <label class="field"><span>日付</span><input v-model="selectedDate" type="date" required :min="todayDate" :disabled="scheduleSaving"></label>
           <label class="field"><span>開始時刻</span><input v-model="selectedTime" type="time" required :disabled="scheduleSaving"></label>
         </div>
         <label class="field"><span>繰り返し</span><select v-model="scheduleRecurrence" :disabled="scheduleSaving"><option value="none">今回のみ</option><option value="daily">毎日</option><option value="weekly">毎週（同じ曜日）</option></select></label>

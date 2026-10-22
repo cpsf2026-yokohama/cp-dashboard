@@ -379,6 +379,105 @@ type PlaybackScheduleRow = {
   recurrenceUntil?: string | null;
 };
 
+type ScheduleRule = {
+  startsAt: string;
+  recurrence?: string | null;
+  recurrenceUntil?: string | null;
+};
+
+type ScheduleListRow = ScheduleRule & {
+  id: string;
+  videoId: string;
+  title: string;
+  createdBy: string;
+};
+
+function recurrencePeriod(rule: ScheduleRule): number {
+  if (rule.recurrence === "daily") return 86_400_000;
+  if (rule.recurrence === "weekly") return 604_800_000;
+  return 0;
+}
+
+function scheduleOccursAt(rule: ScheduleRule, timestamp: number): boolean {
+  const startsAt = Date.parse(rule.startsAt);
+  const period = recurrencePeriod(rule);
+  const until = rule.recurrenceUntil ? Date.parse(rule.recurrenceUntil) : Number.POSITIVE_INFINITY;
+  if (!Number.isFinite(startsAt) || Number.isNaN(until) || timestamp < startsAt || timestamp > until) return false;
+  return period === 0 ? timestamp === startsAt : (timestamp - startsAt) % period === 0;
+}
+
+function nextScheduleOccurrence(rule: ScheduleRule, from: number): string | null {
+  const startsAt = Date.parse(rule.startsAt);
+  const period = recurrencePeriod(rule);
+  const until = rule.recurrenceUntil ? Date.parse(rule.recurrenceUntil) : Number.POSITIVE_INFINITY;
+  if (!Number.isFinite(startsAt) || Number.isNaN(until)) return null;
+  const occurrence = period === 0
+    ? startsAt
+    : startsAt + Math.max(0, Math.ceil((from - startsAt) / period)) * period;
+  return occurrence >= from && occurrence <= until ? new Date(occurrence).toISOString() : null;
+}
+
+export function schedulesConflict(first: ScheduleRule, second: ScheduleRule): boolean {
+  const firstStart = Date.parse(first.startsAt);
+  const secondStart = Date.parse(second.startsAt);
+  const firstPeriod = recurrencePeriod(first);
+  const secondPeriod = recurrencePeriod(second);
+  const firstUntil = first.recurrenceUntil ? Date.parse(first.recurrenceUntil) : Number.POSITIVE_INFINITY;
+  const secondUntil = second.recurrenceUntil ? Date.parse(second.recurrenceUntil) : Number.POSITIVE_INFINITY;
+  if (![firstStart, secondStart].every(Number.isFinite) || Number.isNaN(firstUntil) || Number.isNaN(secondUntil)) return false;
+
+  const lowerBound = Math.max(firstStart, secondStart);
+  const upperBound = Math.min(firstUntil, secondUntil);
+  if (lowerBound > upperBound) return false;
+  if (firstPeriod === 0) return scheduleOccursAt(second, firstStart);
+  if (secondPeriod === 0) return scheduleOccursAt(first, secondStart);
+
+  const gcd = (a: number, b: number): number => b === 0 ? a : gcd(b, a % b);
+  const cycle = firstPeriod / gcd(firstPeriod, secondPeriod) * secondPeriod;
+  let occurrence = firstStart + Math.max(0, Math.ceil((lowerBound - firstStart) / firstPeriod)) * firstPeriod;
+  const searchUntil = Math.min(upperBound, lowerBound + cycle);
+  while (occurrence <= searchUntil) {
+    if (scheduleOccursAt(second, occurrence)) return true;
+    occurrence += firstPeriod;
+  }
+  return false;
+}
+
+async function assertNoScheduleConflict(env: Env, proposed: ScheduleRule, now = new Date().toISOString()): Promise<void> {
+  const activeSchedules = await env.DB.prepare(`
+    SELECT starts_at AS startsAt, recurrence, recurrence_until AS recurrenceUntil
+    FROM schedules
+    WHERE (recurrence = 'none' AND starts_at > ?)
+      OR (recurrence IN ('daily', 'weekly') AND (recurrence_until IS NULL OR recurrence_until >= ?))
+  `).bind(now, now).all<ScheduleRule>();
+  if (activeSchedules.results.some(existing => schedulesConflict(existing, proposed))) {
+    throw new Error("Another playback schedule already uses that time");
+  }
+
+  const pendingRequests = await env.DB.prepare(`
+    SELECT payload_json AS payloadJson
+    FROM change_requests
+    WHERE kind = 'schedule.create' AND status = 'pending'
+  `).all<{ payloadJson: string }>();
+  for (const request of pendingRequests.results) {
+    let payload: ScheduleRule;
+    try {
+      payload = JSON.parse(request.payloadJson) as ScheduleRule;
+    } catch { continue; }
+    if (schedulesConflict(payload, proposed)) throw new Error("Another playback schedule request already uses that time");
+  }
+}
+
+async function cleanupExpiredSchedules(env: Env, now = new Date().toISOString()): Promise<void> {
+  // Keep one-off rows briefly so playback clients can still poll at the scheduled time.
+  const playbackGraceCutoff = new Date(Date.parse(now) - 10 * 60_000).toISOString();
+  await env.DB.prepare(`
+    DELETE FROM schedules
+    WHERE (recurrence = 'none' AND starts_at <= ?)
+      OR (recurrence IN ('daily', 'weekly') AND recurrence_until IS NOT NULL AND recurrence_until <= ?)
+  `).bind(playbackGraceCutoff, now).run();
+}
+
 export function expandPlaybackSchedules(rows: PlaybackScheduleRow[], windowStart: string, windowEnd: string) {
   const windowStartMs = Date.parse(windowStart);
   const windowEndMs = Date.parse(windowEnd);
@@ -443,6 +542,7 @@ async function applyChangeRequest(env: Env, reviewer: string, row: { id: string;
       const videoId = String(payload.videoId); const startsAt = String(payload.startsAt);
       const recurrence = String(payload.recurrence ?? "none");
       const recurrenceUntil = typeof payload.recurrenceUntil === "string" ? payload.recurrenceUntil : null;
+      if (Date.parse(startsAt) <= Date.now()) throw new Error("Schedule start time has already passed");
       const video = await env.DB.prepare("SELECT id FROM videos WHERE id = ?").bind(videoId).first();
       if (!video) throw new Error("Video no longer exists");
       const existing = await env.DB.prepare("SELECT video_id AS videoId, starts_at AS startsAt, recurrence, recurrence_until AS recurrenceUntil FROM schedules WHERE id = ?")
@@ -453,6 +553,7 @@ async function applyChangeRequest(env: Env, reviewer: string, row: { id: string;
         }
         break;
       }
+      await assertNoScheduleConflict(env, { startsAt, recurrence, recurrenceUntil });
       await env.DB.prepare("INSERT INTO schedules (id, video_id, starts_at, created_by, recurrence, recurrence_until) VALUES (?, ?, ?, ?, ?, ?)")
         .bind(String(payload.id), videoId, startsAt, row.requesterId, recurrence, recurrenceUntil).run();
       break;
@@ -537,6 +638,10 @@ async function recordAuditLog(
 }
 
 export default {
+
+  async scheduled(_controller: ScheduledController, env: Env): Promise<void> {
+    await cleanupExpiredSchedules(env);
+  },
 
   async fetch(request: Request, env: Env, _ctx: ExecutionContext): Promise<Response> {
 
@@ -721,6 +826,7 @@ export default {
           const body = await request.json() as Record<string, unknown>;
           const startsAt = new Date(String(body.startsAt));
           if (typeof body.videoId !== "string" || Number.isNaN(startsAt.getTime())) throw new Error("videoId and valid startsAt are required");
+          if (startsAt.getTime() <= Date.now()) throw new Error("Schedule start time must be in the future");
           const recurrence = body.recurrence ?? "none";
           if (recurrence !== "none" && recurrence !== "daily" && recurrence !== "weekly") throw new Error("Invalid recurrence");
           let recurrenceUntil: string | null = null;
@@ -730,6 +836,8 @@ export default {
             recurrenceUntil = until.toISOString();
           }
           if (recurrence === "none" && recurrenceUntil) throw new Error("recurrenceUntil requires a repeating schedule");
+          const proposedSchedule = { startsAt: startsAt.toISOString(), recurrence, recurrenceUntil };
+          await assertNoScheduleConflict(env, proposedSchedule);
           const video = await env.DB.prepare("SELECT id, title FROM videos WHERE id = ?").bind(body.videoId).first<{ id: string; title?: string }>();
           if (!video) throw new Error("Video not found");
           const repeatLabel = recurrence === "daily" ? "（毎日）" : recurrence === "weekly" ? "（毎週）" : "";
@@ -1144,7 +1252,7 @@ export default {
 
           .bind(windowStart, windowEnd, windowStart)
 
-          .all();
+          .all<PlaybackScheduleRow>();
 
         response = Response.json({
           serverTime: now.toISOString(),
@@ -1169,6 +1277,8 @@ export default {
 
       try {
 
+        const now = new Date().toISOString();
+
         const result = await env.DB.prepare(`
 
           SELECT
@@ -1191,15 +1301,18 @@ export default {
 
           JOIN videos v ON v.id = s.video_id
 
+          WHERE (s.recurrence = 'none' AND s.starts_at > ?)
+            OR (s.recurrence IN ('daily', 'weekly') AND (s.recurrence_until IS NULL OR s.recurrence_until > ?))
+
           ORDER BY s.starts_at ASC
 
-        `).all();
+        `).bind(now, now).all<ScheduleListRow>();
 
-        response = Response.json({
-
-          schedules: result.results,
-
+        const schedules = result.results.flatMap((item) => {
+          const nextStartsAt = nextScheduleOccurrence(item, Date.now());
+          return nextStartsAt ? [{ ...item, startsAt: nextStartsAt }] : [];
         });
+        response = Response.json({ schedules });
 
       } catch (error) {
 

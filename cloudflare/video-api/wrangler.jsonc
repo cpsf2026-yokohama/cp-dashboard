@@ -10,6 +10,9 @@
 	"observability": {
 		"enabled": true
 	},
+	"triggers": {
+		"crons": ["*/15 * * * *"]
+	},
 	"upload_source_maps": true,
 	"vars": {
   "ACCESS_TEAM_DOMAIN": "https://cpsf-2026-yokohama.cloudflareaccess.com",
