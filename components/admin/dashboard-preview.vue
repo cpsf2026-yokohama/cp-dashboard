@@ -240,7 +240,8 @@ const activeVerticalBanner = computed(() => props.pendingVerticalBannerUrl || pr
   position: absolute;
   z-index: 1;
   top: 1.2%;
-  left: 1.2%;
+  left: 52.5%;
+  transform: translateX(-50%);
   display: flex;
   width: max-content;
   max-width: 65%;
