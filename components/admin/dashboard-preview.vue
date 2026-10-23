@@ -53,7 +53,14 @@ const countdownProgress = computed(() => nextEvent.value
 const countdownIsToday = computed(() => nextEvent.value !== null
   && countdownDays.value !== null
   && calcLimitDays(nextEvent.value.eventDate, now.value) < 1)
-const countdownIsUrgent = computed(() => countdownDays.value !== null && countdownDays.value <= 4)
+const countdownIsUrgent = computed(() => nextEvent.value !== null
+  && calcLimitDays(nextEvent.value.eventDate, now.value) <= 4)
+const countdownRemainingTime = computed(() => {
+  const remainingDays = nextEvent.value ? calcLimitDays(nextEvent.value.eventDate, now.value) : null
+  if (!nextEvent.value || remainingDays === null || remainingDays > 4 || remainingDays < 1) return null
+  const seconds = Math.floor(Math.max(0, nextEvent.value.eventDate.diff(now.value)) / 1000)
+  return `${Math.floor(seconds / 3600).toString().padStart(2, '0')}:${Math.floor(seconds % 3600 / 60).toString().padStart(2, '0')}:${(seconds % 60).toString().padStart(2, '0')}`
+})
 
 const activeHorizontalBanner = computed(() => props.pendingHorizontalBannerUrl || props.horizontalBannerUrl)
 const activeVerticalBanner = computed(() => props.pendingVerticalBannerUrl || props.verticalBannerUrl)
@@ -62,24 +69,29 @@ const activeVerticalBanner = computed(() => props.pendingVerticalBannerUrl || pr
 <template>
   <section class="dashboard-preview" aria-label="共有設定の画面プレビュー">
     <div class="preview-caption">
-      <span>編集中の共有設定を反映した表示イメージ</span>
+      <span>編集中の設定を反映した横長画面（1280px以上）の表示イメージ</span>
       <span class="preview-silent">音声なし</span>
     </div>
 
     <div class="preview-screen">
+      <div v-if="settings.isBannerVisible && activeHorizontalBanner" class="preview-horizontal-banner">
+        <span>宣伝</span>
+        <img :src="activeHorizontalBanner" alt="横型バナーのプレビュー">
+      </div>
+
       <aside class="preview-status" aria-label="センサー表示のサンプル">
         <p>室温</p>
-        <strong>--<small>°C</small></strong>
+        <strong>—<small>°C</small></strong>
         <p>室内湿度</p>
-        <strong>--<small>%</small></strong>
+        <strong>—<small>%</small></strong>
+        <p>気圧</p>
+        <strong>—<small>hPa</small></strong>
+        <p>外気温*</p>
+        <strong>—<small>°C</small></strong>
         <span>センサー値は端末で表示</span>
       </aside>
 
       <div class="preview-clock-area">
-        <div v-if="settings.isBannerVisible && activeHorizontalBanner" class="preview-horizontal-banner">
-          <span>宣伝</span>
-          <img :src="activeHorizontalBanner" alt="横型バナーのプレビュー">
-        </div>
         <div class="preview-clock">{{ now.format('HH:mm:ss') }}</div>
         <div class="preview-date">{{ now.format('YYYY年MM月DD日(ddd)') }}</div>
         <div class="preview-weather">天気・センサー情報は端末の設定を表示</div>
@@ -101,6 +113,7 @@ const activeVerticalBanner = computed(() => props.pendingVerticalBannerUrl || pr
           </div>
           <span v-if="countdownIsToday" class="preview-today">本日開催！</span>
           <span v-else-if="nextEvent" class="preview-countdown-label">次の予定まで</span>
+          <span v-if="countdownRemainingTime" class="preview-countdown-time">残り時間 {{ countdownRemainingTime }}</span>
         </div>
       </aside>
     </div>
@@ -133,14 +146,15 @@ const activeVerticalBanner = computed(() => props.pendingVerticalBannerUrl || pr
 
 .preview-screen {
   position: relative;
+  container-type: size;
   display: grid;
-  grid-template-columns: 20% 1fr 17%;
+  grid-template-columns: 20% minmax(0, 1fr) 15%;
   align-items: center;
-  gap: 1.5%;
+  gap: 1%;
   aspect-ratio: 16 / 9;
   min-height: 260px;
   max-height: 520px;
-  padding: 3%;
+  padding: 1.2%;
   overflow: hidden;
   background: #f8fafc;
   color: #172033;
@@ -185,19 +199,17 @@ const activeVerticalBanner = computed(() => props.pendingVerticalBannerUrl || pr
 }
 
 .preview-clock-area {
-  position: relative;
   display: flex;
   min-width: 0;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 9px;
-  padding-top: 13%;
+  gap: clamp(6px, 1cqw, 12px);
   text-align: center;
 }
 
 .preview-clock {
-  font-size: clamp(34px, 7.4vw, 112px);
+  font-size: clamp(34px, 13cqw, 140px);
   font-weight: 700;
   letter-spacing: -0.055em;
   line-height: 1;
@@ -206,40 +218,45 @@ const activeVerticalBanner = computed(() => props.pendingVerticalBannerUrl || pr
 }
 
 .preview-date {
-  font-size: clamp(12px, 2.1vw, 30px);
+  font-size: clamp(12px, 5cqw, 42px);
   white-space: nowrap;
 }
 
 .preview-weather {
   color: #64748b;
-  font-size: clamp(8px, 1vw, 14px);
+  font-size: clamp(8px, 1.4cqw, 14px);
 }
 
 .preview-horizontal-banner {
   position: absolute;
-  top: -5%;
-  left: 50%;
+  z-index: 1;
+  top: 1.2%;
+  left: 1.2%;
   display: flex;
-  max-width: 88%;
+  width: max-content;
+  max-width: 65%;
+  height: 17%;
   align-items: center;
-  transform: translateX(-50%);
   overflow: hidden;
-  border: 2px solid #475569;
-  border-radius: 8px;
+  border: 3px solid #475569;
+  border-radius: 12px;
   background: #1f2937;
 }
 
 .preview-horizontal-banner span {
-  padding: 5px;
+  flex: 0 0 auto;
+  padding: 0.5cqw;
   color: white;
-  font-size: clamp(8px, 1.2vw, 16px);
+  font-size: clamp(8px, 1.6cqw, 18px);
   writing-mode: vertical-rl;
 }
 
 .preview-horizontal-banner img {
   display: block;
-  max-width: 100%;
-  max-height: 18%;
+  width: auto;
+  max-width: calc(100% - 2.5cqw);
+  height: 100%;
+  max-height: 100%;
   object-fit: contain;
 }
 
@@ -291,11 +308,17 @@ const activeVerticalBanner = computed(() => props.pendingVerticalBannerUrl || pr
 
 .preview-countdown-ring.urgent {
   color: #dc2626;
+}
+
+.preview-countdown-ring.urgent::before {
   background: conic-gradient(#dc2626 var(--progress), #fee2e2 var(--progress));
 }
 
 .preview-countdown-ring.today {
   color: #d97706;
+}
+
+.preview-countdown-ring.today::before {
   background: conic-gradient(#f59e0b var(--progress), #fef3c7 var(--progress));
 }
 
@@ -308,6 +331,13 @@ const activeVerticalBanner = computed(() => props.pendingVerticalBannerUrl || pr
 .preview-today {
   color: #b45309;
   font-weight: 700;
+}
+
+.preview-countdown-time {
+  color: #dc2626;
+  font-size: clamp(9px, 1.1cqw, 15px);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
 }
 
 .preview-vertical-banner {
@@ -330,7 +360,7 @@ const activeVerticalBanner = computed(() => props.pendingVerticalBannerUrl || pr
 @media (max-width: 600px) {
   .preview-screen {
     min-height: 220px;
-    grid-template-columns: 16% 1fr 22%;
+    grid-template-columns: 16% minmax(0, 1fr) 22%;
     gap: 1%;
   }
 
