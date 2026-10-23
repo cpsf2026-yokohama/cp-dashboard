@@ -938,13 +938,21 @@ function openSchedule() {
           <p v-if="settingsPolicyLoading" class="state-message muted" role="status">共有設定を読み込み中...</p>
           <template v-else-if="sharedSettings">
             <div class="admin-preview-toolbar">
-              <div><h3>画面プレビュー</h3><p class="help">入力中の設定がダッシュボードにどう表示されるか確認できます。</p></div>
-              <button class="button button-small" :aria-expanded="showDashboardPreview" @click="showDashboardPreview = !showDashboardPreview">
-                {{ showDashboardPreview ? 'プレビューを閉じる' : '表示を確認' }}
+              <div class="admin-preview-copy"><h3>画面プレビュー</h3><p class="help">保存前の変更も反映して、ダッシュボードでの見え方を確認できます。</p></div>
+              <button
+                class="button button-preview"
+                :aria-expanded="showDashboardPreview"
+                aria-controls="admin-dashboard-preview"
+                @click="showDashboardPreview = !showDashboardPreview"
+              >
+                <svg v-if="showDashboardPreview" aria-hidden="true" viewBox="0 0 24 24"><path d="M3 3l18 18M10.6 10.6a2 2 0 002.8 2.8M9.9 5.2A11.8 11.8 0 0112 5c5 0 9 5 9 7a9.7 9.7 0 01-2.3 3.2M6.2 6.2C3.6 7.7 2 10.3 2 12c0 2 4 7 10 7a10 10 0 003.2-.5" /></svg>
+                <svg v-else aria-hidden="true" viewBox="0 0 24 24"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7z" /><circle cx="12" cy="12" r="3" /></svg>
+                {{ showDashboardPreview ? 'プレビューを閉じる' : 'プレビューを開く' }}
               </button>
             </div>
             <AdminDashboardPreview
               v-if="showDashboardPreview"
+              id="admin-dashboard-preview"
               :settings="sharedSettings"
               :horizontal-banner-url="bannerInfo.horizontal?.url ?? null"
               :vertical-banner-url="bannerInfo.vertical?.url ?? null"
@@ -1162,8 +1170,12 @@ h2 { font-size: 18px; font-weight: 600; line-height: 1.5; }
 .admin-setting-block { margin-top: 20px; padding-top: 18px; border-top: 1px solid var(--admin-border); }
 .admin-setting-block h3 { font-size: 15px; font-weight: 600; }
 .admin-setting-block h4 { font-size: 14px; font-weight: 600; }
-.admin-preview-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 12px 0; }
-.admin-preview-toolbar h3 { margin: 0 0 4px; font-size: 15px; font-weight: 600; }
+.admin-preview-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 16px 0 20px; padding: 16px 18px; border: 1px solid #a5d5cf; border-left: 5px solid #0f766e; border-radius: 8px; background: #f0fdfa; }
+.admin-preview-copy h3 { margin: 0 0 4px; color: #134e4a; font-size: 16px; font-weight: 700; }
+.admin-preview-copy .help { margin: 0; }
+.button-preview { min-height: 42px; gap: 9px; padding: 9px 16px; border-color: #0f766e; background: #0f766e; color: #fff; font-size: 14px; font-weight: 650; }
+.button-preview:hover:not(:disabled) { border-color: #115e59; background: #115e59; }
+.button-preview svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.8; }
 .banner-management-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 14px; }
 .banner-management-card { display: flex; flex-direction: column; gap: 10px; padding: 14px; border: 1px solid var(--admin-border); border-radius: 8px; }
 .banner-preview { display: flex; align-items: center; justify-content: center; min-height: 160px; overflow: hidden; border-radius: 6px; background: #f3f4f6; }
@@ -1173,6 +1185,8 @@ h2 { font-size: 18px; font-weight: 600; line-height: 1.5; }
 .admin-chime-row { display: grid; grid-template-columns: minmax(120px, 180px) auto auto auto; align-items: center; gap: 14px; padding: 8px 0; border-bottom: 1px solid #e5e7eb; }
 .admin-countdown-row { grid-template-columns: minmax(130px, 190px) minmax(160px, 1fr) minmax(100px, 140px) auto; align-items: center; margin: 8px 0; }
 @media (max-width: 640px) {
+  .admin-preview-toolbar { align-items: stretch; flex-direction: column; }
+  .button-preview { width: 100%; }
   .admin-chime-row { grid-template-columns: 1fr 1fr; }
   .admin-countdown-row { grid-template-columns: 1fr 1fr; }
 }
