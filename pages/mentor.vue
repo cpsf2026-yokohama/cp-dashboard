@@ -123,7 +123,7 @@ onMounted(() => void loadRequests())
 
 <template>
   <main class="mentor-page">
-    <header><div><p class="eyebrow">MENTOR REVIEW</p><h1>変更リクエスト</h1><p>{{ canReview ? '承認されるまで、申請内容はサイトや再生端末に反映されません。' : '申請待ちの内容を確認できます。自分の申請は取り消せますが、承認・却下はできません。' }}</p></div><nav><a href="/admin">管理画面</a><button @click="void loadRequests()">再読み込み</button></nav></header>
+    <header><div><p class="eyebrow">MENTOR REVIEW</p><h1>変更リクエスト</h1><p>{{ canReview ? '承認されるまで、申請内容はサイトや再生端末に反映されません。' : '申請待ちの内容を確認できます。自分の申請は取り消せます。承認・却下はできません。' }}</p></div><nav><a href="/admin">管理画面</a><button @click="void loadRequests()">再読み込み</button></nav></header>
     <p v-if="error" class="error" role="alert">{{ error }} <a v-if="error.includes('認証')" :href="appPath('admin')">管理画面で認証</a></p>
     <p v-if="loading" class="empty" role="status">申請を読み込み中...</p>
     <p v-else-if="!error && requests.length === 0" class="empty">申請待ちはありません。</p>
