@@ -166,15 +166,24 @@ const activeVerticalBanner = computed(() => props.pendingVerticalBannerUrl || pr
   min-width: 0;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
   gap: 5px;
   text-align: center;
 }
 
 .preview-status {
+  align-self: start;
+  transform: translateY(6cqh);
+  justify-content: center;
   min-height: 55%;
   border-right: 1px solid #cbd5e1;
   padding-right: 6%;
+}
+
+.preview-side-area {
+  align-self: start;
+  justify-content: flex-start;
+  height: 100%;
+  padding-top: 1.2%;
 }
 
 .preview-status p {
@@ -262,7 +271,9 @@ const activeVerticalBanner = computed(() => props.pendingVerticalBannerUrl || pr
 
 .preview-countdown {
   display: flex;
-  width: 100%;
+  width: max-content;
+  max-width: 100%;
+  align-self: flex-end;
   flex-direction: column;
   align-items: center;
   gap: 8px;
@@ -271,9 +282,9 @@ const activeVerticalBanner = computed(() => props.pendingVerticalBannerUrl || pr
 .preview-countdown > p {
   margin: 0;
   color: #334155;
-  font-size: clamp(10px, 1.3vw, 18px);
+  font-size: clamp(10px, 1.1cqw, 18px);
   font-weight: 600;
-  overflow-wrap: anywhere;
+  white-space: nowrap;
 }
 
 .preview-countdown-ring {
@@ -343,7 +354,7 @@ const activeVerticalBanner = computed(() => props.pendingVerticalBannerUrl || pr
 .preview-vertical-banner {
   display: grid;
   width: 100%;
-  height: 100%;
+  height: 45%;
   place-items: center;
   color: #64748b;
   font-size: clamp(9px, 1vw, 14px);
