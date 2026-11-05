@@ -3,6 +3,7 @@ import {
   LOCAL_SETTINGS_BACKUP_KEY,
   SHARED_SETTING_KEYS,
   applySharedSettingsToClient,
+  loadSharedChimes,
   loadSharedBanners,
   loadSharedSettings,
   saveSharedSettings,
@@ -61,6 +62,19 @@ export default defineNuxtPlugin(async () => {
     verticalBannerSource().value = banners.vertical?.url ?? null;
   };
 
+  const applyRemoteChimes = async () => {
+    const chimes = await loadSharedChimes();
+    for (const kind of ['chime', 'pre-chime'] as const) {
+      const url = chimes[kind]?.url ?? null;
+      const sharedUrl = sharedChimeAudioUrl(kind);
+      if (sharedUrl.value === url) continue;
+      sharedUrl.value = url;
+      const source = kind === 'chime' ? chimeSource() : preChimeSource();
+      source.value = new Audio(url ?? `${useRuntimeConfig().app.baseURL}${kind === 'chime' ? 'chime.mp3' : 'pre-chime.mp3'}`);
+      source.value.load();
+    }
+  };
+
   try {
     const initial = await loadSharedSettings();
     backupLocalSettingsOnce();
@@ -69,6 +83,11 @@ export default defineNuxtPlugin(async () => {
       await applyRemoteBanners();
     } catch (cause) {
       console.warn('共有バナーの初期読み込みに失敗しました:', cause);
+    }
+    try {
+      await applyRemoteChimes();
+    } catch (cause) {
+      console.warn('共有チャイム音声の初期読み込みに失敗しました:', cause);
     }
     ready.value = true;
 
@@ -122,6 +141,11 @@ export default defineNuxtPlugin(async () => {
         await applyRemoteBanners();
       } catch (cause) {
         console.warn('共有バナーの再読み込みに失敗しました:', cause);
+      }
+      try {
+        await applyRemoteChimes();
+      } catch (cause) {
+        console.warn('共有チャイム音声の再読み込みに失敗しました:', cause);
       }
     };
     const refreshWhenVisible = () => {

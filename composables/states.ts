@@ -34,6 +34,7 @@ export const alertFileName = () => useLocalStorage<string>('alert.mp3', () => '�
 export const chimeSource = () => useState<HTMLAudioElement>('chimeSource', () => new Audio(`${useRuntimeConfig().app.baseURL}chime.mp3`));
 // チャイムの元ファイル名
 export const chimeFileName = () => useLocalStorage<string>('chime.mp3', () => 'デフォルトの音声');
+export const sharedChimeAudioUrl = (kind: 'chime' | 'pre-chime') => useState<string | null>(`shared-${kind}-audio-url`, () => null);
 // 予鈴の音声ソース
 export const preChimeSource = () => useState<HTMLAudioElement>('preChimeSource', () => new Audio(`${useRuntimeConfig().app.baseURL}pre-chime.mp3`));
 // 予鈴の元ファイル名

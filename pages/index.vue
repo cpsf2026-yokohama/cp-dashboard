@@ -178,14 +178,18 @@ onMounted(async () => {
       new Audio("./beep.mp3").play();
 
       // チャイム音源を読み込む (iOS対策でHTMLAudioをこの時点で読み込む)
-      if (chimeFileName().value !== 'デフォルトの音声') {
+      if (sharedChimeAudioUrl('chime').value) {
+        chimeSource().value.load();
+      } else if (chimeFileName().value !== 'デフォルトの音声') {
         await appendFileToAudioState('chime.mp3', chimeSource);
       } else {
         chimeSource().value.load();
       }
 
       // 予鈴音源を読み込む
-      if (preChimeFileName().value !== 'デフォルトの音声') {
+      if (sharedChimeAudioUrl('pre-chime').value) {
+        preChimeSource().value.load();
+      } else if (preChimeFileName().value !== 'デフォルトの音声') {
         await appendFileToAudioState('pre-chime.mp3', preChimeSource);
       } else {
         preChimeSource().value.load();

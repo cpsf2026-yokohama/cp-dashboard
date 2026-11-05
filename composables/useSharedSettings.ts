@@ -149,6 +149,44 @@ function getSettingsApiBase(): string {
 }
 
 export type SharedBannerKind = 'horizontal' | 'vertical';
+export type SharedChimeKind = 'chime' | 'pre-chime';
+export interface SharedChimeInfo {
+  url: string;
+  size: number;
+  contentType: string;
+}
+
+export async function loadSharedChimes(): Promise<Record<SharedChimeKind, SharedChimeInfo | null>> {
+  const response = await fetch(`${getSettingsApiBase()}/chimes`, { cache: 'no-store' });
+  if (!response.ok) throw new Error(`チャイム音声の取得に失敗しました (${response.status})`);
+  const payload: unknown = await response.json();
+  if (typeof payload !== 'object' || payload === null || !('chimes' in payload)
+    || typeof payload.chimes !== 'object' || payload.chimes === null) throw new Error('チャイム音声情報の形式が正しくありません');
+  const raw = payload.chimes as Record<string, unknown>;
+  const result = {} as Record<SharedChimeKind, SharedChimeInfo | null>;
+  for (const kind of ['chime', 'pre-chime'] as const) {
+    const item = raw[kind];
+    if (item === null || item === undefined) { result[kind] = null; continue; }
+    if (typeof item !== 'object' || !('etag' in item) || typeof item.etag !== 'string'
+      || !('size' in item) || typeof item.size !== 'number'
+      || !('contentType' in item) || typeof item.contentType !== 'string') throw new Error('チャイム音声情報の形式が正しくありません');
+    result[kind] = { url: `${getSettingsApiBase()}/chimes/${kind}?v=${encodeURIComponent(item.etag)}`, size: item.size, contentType: item.contentType };
+  }
+  return result;
+}
+
+export async function uploadSharedChime(kind: SharedChimeKind, file: File): Promise<void> {
+  if (!file.type.startsWith('audio/')) throw new Error('音声ファイルを選択してください');
+  if (file.size === 0 || file.size > 10 * 1024 * 1024) throw new Error('音声ファイルは10 MiB以下にしてください');
+  const response = await fetch(`${getSettingsApiBase()}/chimes/${kind}`, { method: 'PUT', headers: { 'Content-Type': file.type }, body: file });
+  if (!response.ok) throw new Error(`チャイム音声を申請できませんでした (${response.status})`);
+}
+
+export async function deleteSharedChime(kind: SharedChimeKind): Promise<void> {
+  const response = await fetch(`${getSettingsApiBase()}/chimes/${kind}`, { method: 'DELETE' });
+  if (!response.ok) throw new Error(`チャイム音声の削除を申請できませんでした (${response.status})`);
+}
+
 export interface SharedBannerInfo {
   url: string;
   size: number;

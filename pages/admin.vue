@@ -3,13 +3,18 @@ import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import {
   DEFAULT_SHARED_SETTINGS_POLICY,
   SHARED_SETTING_KEYS,
+  deleteSharedChime,
   deleteSharedBanner,
+  loadSharedChimes,
   loadSharedBanners,
   loadSharedSettings,
   saveSharedSettingsPolicy,
   uploadSharedBanner,
+  uploadSharedChime,
   type SharedBannerInfo,
   type SharedBannerKind,
+  type SharedChimeInfo,
+  type SharedChimeKind,
   type SharedSettings,
   type SharedSettingsPolicy,
 } from '../composables/useSharedSettings'
@@ -78,6 +83,8 @@ const settingsPolicySaving = ref(false)
 const sharedSettings = ref<SharedSettings | null>(null)
 const settingsValuesSaving = ref(false)
 const bannerInfo = ref<Record<SharedBannerKind, SharedBannerInfo | null>>({ horizontal: null, vertical: null })
+const chimeInfo = ref<Record<SharedChimeKind, SharedChimeInfo | null>>({ chime: null, 'pre-chime': null })
+const chimeBusy = ref<SharedChimeKind | null>(null)
 const pendingBannerPreviewUrls = ref<Record<SharedBannerKind, string | null>>({ horizontal: null, vertical: null })
 const showDashboardPreview = ref(false)
 const bannerUploading = ref<SharedBannerKind | null>(null)
@@ -281,11 +288,46 @@ async function loadSettingsPolicy() {
     settingsPolicy.value = { ...data.apply }
     sharedSettings.value = structuredClone(data.settings)
     bannerInfo.value = await loadSharedBanners()
+    chimeInfo.value = await loadSharedChimes()
   } catch (error) {
     console.error('Failed to load shared settings policy:', error)
     showNotice('共有設定の反映対象を読み込めませんでした。', true)
   } finally {
     settingsPolicyLoading.value = false
+  }
+}
+
+async function uploadChime(kind: SharedChimeKind, event: Event) {
+  const input = event.target
+  if (!(input instanceof HTMLInputElement)) return
+  const file = input.files?.[0]
+  if (!file) return
+  const label = kind === 'chime' ? 'チャイム音声' : '予鈴音声'
+  if (!confirmRequestSubmission(`${label}の変更申請`)) { input.value = ''; return }
+  chimeBusy.value = kind
+  try {
+    await uploadSharedChime(kind, file)
+    showNotice(`${label}の変更を申請しました。メンターの承認後に各端末へ反映されます。`)
+  } catch (error) {
+    showNotice(`${label}を申請できませんでした：${error instanceof Error ? error.message : '不明なエラー'}`, true)
+  } finally {
+    chimeBusy.value = null
+    input.value = ''
+  }
+}
+
+async function removeChime(kind: SharedChimeKind) {
+  if (!chimeInfo.value[kind] || chimeBusy.value) return
+  const label = kind === 'chime' ? 'チャイム音声' : '予鈴音声'
+  if (!window.confirm(`${label}を削除する申請を送りますか？`)) return
+  chimeBusy.value = kind
+  try {
+    await deleteSharedChime(kind)
+    showNotice(`${label}の削除を申請しました。メンターの承認後にデフォルト音声へ戻ります。`)
+  } catch (error) {
+    showNotice(`${label}の削除を申請できませんでした：${error instanceof Error ? error.message : '不明なエラー'}`, true)
+  } finally {
+    chimeBusy.value = null
   }
 }
 
@@ -984,6 +1026,23 @@ function openSchedule() {
                   </div>
                   <label class="field"><span>{{ bannerInfo[item.kind] ? '画像を差し替え' : '画像を追加' }}</span><input type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/avif" :disabled="bannerUploading !== null || bannerDeleting !== null" @change="uploadBanner(item.kind, $event)"></label>
                   <p class="help">{{ item.recommendation }}</p>
+                </article>
+              </div>
+            </div>
+            <div class="admin-setting-block">
+              <div class="section-heading">
+                <div><h3>チャイム音声</h3><p class="help">音声はR2へ保存し、メンター承認後に全端末へ反映します。MP3/WAV/OGG/M4Aなど、10 MiB以下。</p></div>
+              </div>
+              <div class="banner-management-grid">
+                <article v-for="item in [
+                  { kind: 'chime' as const, title: 'チャイム' },
+                  { kind: 'pre-chime' as const, title: '予鈴チャイム' },
+                ]" :key="item.kind" class="banner-management-card">
+                  <div class="section-heading">
+                    <div><h4>{{ item.title }}</h4><p class="help">{{ chimeInfo[item.kind] ? `${(chimeInfo[item.kind]!.size / 1024).toFixed(0)} KiB · ${chimeInfo[item.kind]!.contentType}` : 'カスタム音声なし（デフォルト音声）' }}</p></div>
+                    <button v-if="chimeInfo[item.kind]" class="button button-small button-danger" :disabled="chimeBusy !== null" @click="void removeChime(item.kind)">{{ chimeBusy === item.kind ? '申請中...' : 'デフォルトに戻す' }}</button>
+                  </div>
+                  <label class="field"><span>{{ chimeInfo[item.kind] ? '音声を差し替え' : '音声を指定' }}</span><input type="file" accept="audio/*" :disabled="chimeBusy !== null" @change="uploadChime(item.kind, $event)"></label>
                 </article>
               </div>
             </div>

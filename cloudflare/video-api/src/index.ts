@@ -20,10 +20,18 @@ const localAdminId = "local-test-admin";
 const bannerKinds = ["horizontal", "vertical"] as const;
 type BannerKind = (typeof bannerKinds)[number];
 const maxBannerBytes = 10 * 1024 * 1024;
+const chimeKinds = ["chime", "pre-chime"] as const;
+type ChimeKind = (typeof chimeKinds)[number];
+const maxChimeBytes = 10 * 1024 * 1024;
 
 function bannerKindFromPath(pathname: string): BannerKind | null {
   const match = /^\/api\/banners\/(horizontal|vertical)$/.exec(pathname);
   return (match?.[1] as BannerKind | undefined) ?? null;
+}
+
+function chimeKindFromPath(pathname: string): ChimeKind | null {
+  const match = /^\/api\/chimes\/(chime|pre-chime)$/.exec(pathname);
+  return (match?.[1] as ChimeKind | undefined) ?? null;
 }
 
 const sharedSettingKeys = [
@@ -117,6 +125,7 @@ export function requiresAccessAuthentication(method: string, pathname: string): 
     (method === "DELETE" && /^\/api\/change-requests\/[^/]+$/.test(pathname)) ||
     (method === "PUT" && pathname === "/api/settings") ||
     ((method === "PUT" || method === "DELETE") && /^\/api\/banners\/(horizontal|vertical)$/.test(pathname)) ||
+    ((method === "PUT" || method === "DELETE") && /^\/api\/chimes\/(chime|pre-chime)$/.test(pathname)) ||
     (method === "GET" &&
       ["/api/schedules", "/api/videos", "/api/users"].includes(pathname)) ||
     (method === "POST" && ["/api/schedules", "/api/videos", "/api/users"].includes(pathname)) ||
@@ -133,6 +142,7 @@ export function hasRoleForRoute(user: Pick<ApiUser, "role">, method: string, pat
   if (
     (method === "PUT" && pathname === "/api/settings") ||
     ((method === "PUT" || method === "DELETE") && /^\/api\/banners\/(horizontal|vertical)$/.test(pathname)) ||
+    ((method === "PUT" || method === "DELETE") && /^\/api\/chimes\/(chime|pre-chime)$/.test(pathname)) ||
     (method === "GET" && pathname === "/api/users")
   ) {
     return user.role === "admin" || user.role === "mentor";
@@ -509,6 +519,7 @@ export function expandPlaybackSchedules(rows: PlaybackScheduleRow[], windowStart
 function isDashboardMutation(method: string, pathname: string): boolean {
   return (method === "PUT" && pathname === "/api/settings") ||
     ((method === "PUT" || method === "DELETE") && /^\/api\/banners\/(horizontal|vertical)$/.test(pathname)) ||
+    ((method === "PUT" || method === "DELETE") && /^\/api\/chimes\/(chime|pre-chime)$/.test(pathname)) ||
     (method === "POST" && pathname === "/api/schedules") ||
     (method === "DELETE" && (/^\/api\/schedules\/[^/]+$/.test(pathname) || /^\/api\/videos\/[^/]+$/.test(pathname)));
 }
@@ -597,6 +608,23 @@ async function applyChangeRequest(env: Env, reviewer: string, row: { id: string;
       await env.VIDEO_BUCKET.delete(String(payload.stagingKey)); break;
     }
     case "banner.delete": await env.VIDEO_BUCKET.delete(`banners/${String(payload.kind)}`); break;
+    case "chime.upload": {
+      const audioKind = String(payload.kind);
+      const stagingKey = String(payload.stagingKey);
+      const staged = await env.VIDEO_BUCKET.get(stagingKey);
+      if (!staged) {
+        const published = await env.VIDEO_BUCKET.head(`chimes/${audioKind}`);
+        if (published?.customMetadata?.changeRequestId === row.id) break;
+        throw new Error("Staged audio file is missing");
+      }
+      await env.VIDEO_BUCKET.put(`chimes/${audioKind}`, staged.body, {
+        httpMetadata: { contentType: String(payload.contentType) },
+        customMetadata: { changeRequestId: row.id },
+      });
+      await env.VIDEO_BUCKET.delete(stagingKey);
+      break;
+    }
+    case "chime.delete": await env.VIDEO_BUCKET.delete(`chimes/${String(payload.kind)}`); break;
     default: throw new Error("Unsupported change request");
   }
   await recordAuditLog(env, reviewer, "change.approved", "change_request", row.id, { kind: row.kind });
@@ -715,8 +743,8 @@ export default {
       const id = decodeURIComponent(url.pathname.split("/")[3]);
       const row = await env.DB.prepare("SELECT kind, payload_json AS payloadJson FROM change_requests WHERE id = ? AND status = 'pending'")
         .bind(id).first<{ kind: string; payloadJson: string }>();
-      if (!row || row.kind !== "banner.upload") {
-        response = jsonError("Pending banner preview not found", 404);
+      if (!row || (row.kind !== "banner.upload" && row.kind !== "chime.upload")) {
+        response = jsonError("Pending media preview not found", 404);
       } else {
         const payload = JSON.parse(row.payloadJson) as Record<string, unknown>;
         const stagingKey = typeof payload.stagingKey === "string" && payload.stagingKey.startsWith("pending/") ? payload.stagingKey : "";
@@ -822,6 +850,20 @@ export default {
           stagingKeyToCleanup = stagingKey;
           await env.VIDEO_BUCKET.put(stagingKey, bytes, { httpMetadata: { contentType } });
           kind = "banner.upload"; summary = `${bannerKind === "horizontal" ? "横" : "縦"}型バナーを更新`; payload = { kind: bannerKind, stagingKey, contentType };
+        } else if (chimeKindFromPath(url.pathname) && request.method === "DELETE") {
+          const audioKind = chimeKindFromPath(url.pathname)!;
+          kind = "chime.delete"; summary = `${audioKind === "chime" ? "チャイム" : "予鈴チャイム"}音声を削除`; payload = { kind: audioKind };
+        } else if (chimeKindFromPath(url.pathname) && request.method === "PUT") {
+          const audioKind = chimeKindFromPath(url.pathname)!;
+          const contentType = request.headers.get("Content-Type")?.split(";")[0].trim().toLowerCase() ?? "";
+          const bytes = await request.arrayBuffer();
+          if (!/^audio\/(mpeg|mp4|wav|ogg|webm|aac|x-wav|x-m4a|wave)$/.test(contentType) || bytes.byteLength < 1 || bytes.byteLength > maxChimeBytes) {
+            throw new Error("MP3/WAV/OGG/M4Aなどの音声ファイル（10 MiB以下）を指定してください");
+          }
+          const stagingKey = `pending/${crypto.randomUUID()}`;
+          stagingKeyToCleanup = stagingKey;
+          await env.VIDEO_BUCKET.put(stagingKey, bytes, { httpMetadata: { contentType } });
+          kind = "chime.upload"; summary = `${audioKind === "chime" ? "チャイム" : "予鈴チャイム"}音声を変更`; payload = { kind: audioKind, stagingKey, contentType };
         } else if (request.method === "POST" && url.pathname === "/api/schedules") {
           const body = await request.json() as Record<string, unknown>;
           const startsAt = new Date(String(body.startsAt));
@@ -870,6 +912,40 @@ export default {
       }
 
 
+    } else if (request.method === "GET" && url.pathname === "/api/chimes") {
+      try {
+        const entries = await Promise.all(chimeKinds.map(async (audioKind) => {
+          const object = await env.VIDEO_BUCKET.head(`chimes/${audioKind}`);
+          return [audioKind, object ? {
+            etag: object.httpEtag,
+            size: object.size,
+            contentType: object.httpMetadata?.contentType ?? "application/octet-stream",
+          } : null] as const;
+        }));
+        response = Response.json({ chimes: Object.fromEntries(entries) });
+      } catch (error) {
+        console.error("Failed to retrieve chimes:", error);
+        response = jsonError("Failed to retrieve chimes", 500);
+      }
+    } else if (request.method === "GET" && chimeKindFromPath(url.pathname)) {
+      try {
+        const audioKind = chimeKindFromPath(url.pathname)!;
+        const object = await env.VIDEO_BUCKET.get(`chimes/${audioKind}`);
+        if (!object) response = jsonError("Chime audio not found", 404);
+        else {
+          const headers = new Headers({
+            "Content-Type": object.httpMetadata?.contentType ?? "application/octet-stream",
+            "Cache-Control": "public, max-age=0, must-revalidate",
+            "ETag": object.httpEtag,
+            "X-Content-Type-Options": "nosniff",
+          });
+          if (request.headers.get("If-None-Match") === object.httpEtag) response = new Response(null, { status: 304, headers });
+          else response = new Response(object.body, { headers });
+        }
+      } catch (error) {
+        console.error("Failed to retrieve chime audio:", error);
+        response = jsonError("Failed to retrieve chime audio", 500);
+      }
     } else if (request.method === "GET" && url.pathname === "/api/banners") {
       try {
         const banners = await Promise.all(bannerKinds.map(async (kind) => {
