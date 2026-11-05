@@ -856,6 +856,67 @@ describe("Video API worker", () => {
     expect(roleUpdated).toBe(false);
   });
 
+  it("allows mentors to demote privileged users to ordinary roles but not promote them", async () => {
+    const mentor = { id: "local-test-admin", email: "mentor@example.invalid", role: "mentor" };
+    const targets = ["admin", "mentor"] as const;
+    for (const role of targets) {
+      const target = { id: `target-${role}`, email: `${role}@example.invalid`, role, createdAt: "2026-01-01" };
+      let updatedRole: unknown;
+      const db = {
+        prepare: (sql: string) => ({
+          bind: (...values: unknown[]) => ({
+            first: async () => sql.includes("AND role = 'mentor'") ? mentor : target,
+            run: async () => {
+              if (sql.includes("UPDATE users")) updatedRole = values[0];
+              return { success: true, meta: { changes: 1 } };
+            },
+          }),
+        }),
+      } as unknown as D1Database;
+      const response = await worker.fetch(new IncomingRequest(`http://127.0.0.1:8787/api/users/${target.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ role: "operator" }),
+      }), {
+        ...env,
+        DB: db,
+        LOCAL_AUTH_BYPASS: "true",
+        LOCAL_AUTH_BYPASS_ROLE: "mentor",
+        ACCESS_TEAM_DOMAIN: "",
+        ACCESS_AUD: "",
+      }, createExecutionContext());
+
+      expect(response.status).toBe(200);
+      expect(updatedRole).toBe("operator");
+    }
+
+    let roleUpdated = false;
+    const ordinaryUser = { id: "target-producer", email: "producer@example.invalid", role: "producer", createdAt: "2026-01-01" };
+    const db = {
+      prepare: (sql: string) => ({
+        bind: (..._values: unknown[]) => ({
+          first: async () => sql.includes("AND role = 'mentor'") ? mentor : ordinaryUser,
+          run: async () => { roleUpdated = true; return { success: true, meta: { changes: 1 } }; },
+        }),
+      }),
+    } as unknown as D1Database;
+    const promotion = await worker.fetch(new IncomingRequest("http://127.0.0.1:8787/api/users/target-producer", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ role: "mentor" }),
+    }), {
+      ...env,
+      DB: db,
+      LOCAL_AUTH_BYPASS: "true",
+      LOCAL_AUTH_BYPASS_ROLE: "mentor",
+      ACCESS_TEAM_DOMAIN: "",
+      ACCESS_AUD: "",
+    }, createExecutionContext());
+
+    expect(promotion.status).toBe(403);
+    expect(roleUpdated).toBe(false);
+  });
+
   it("forwards the original request and Access/Range headers through the Pages proxy", async () => {
     const request = new Request(
       "https://cp-dashboard-d17.pages.dev/api/stream/videos/video-1/stream",

@@ -1213,12 +1213,10 @@ export default {
 
           if (!user) {
             response = jsonError("User not found", 404);
-          } else if (accessUser!.role === "mentor" && (
-            user.id === accessUser!.id ||
-            (user.role !== "producer" && user.role !== "operator") ||
-            (body.role !== "producer" && body.role !== "operator")
-          )) {
-            response = jsonError("Mentors can only manage other producer or operator accounts", 403);
+          } else if (accessUser!.role === "mentor" && user.id === accessUser!.id) {
+            response = jsonError("Mentors cannot change their own role", 403);
+          } else if (accessUser!.role === "mentor" && body.role !== "producer" && body.role !== "operator") {
+            response = jsonError("Mentors may only assign producer or operator roles to other users", 403);
           } else if (user.id === accessUser!.id && body.role === "mentor") {
             response = jsonError("You cannot grant yourself mentor privileges", 403);
           } else if (user.id === accessUser!.id && body.role !== "admin") {
@@ -1860,6 +1858,7 @@ export default {
           canManageUsers: accessUser!.role === "admin" || accessUser!.role === "mentor",
           canChangeUserRoles: accessUser!.role === "admin" || accessUser!.role === "mentor",
           canAssignPrivilegedRoles: accessUser!.role === "admin",
+          currentUserId: accessUser!.id,
           canReviewRequests: accessUser!.role === "mentor",
           canViewRequests: accessUser!.role === "admin" || accessUser!.role === "mentor",
         });

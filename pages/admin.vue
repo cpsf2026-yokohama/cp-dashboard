@@ -60,6 +60,7 @@ const activeTab = ref<'overview' | 'videos' | 'schedule' | 'users' | 'settings'>
 const canManageUsers = ref(false)
 const canChangeUserRoles = ref(false)
 const canAssignPrivilegedRoles = ref(false)
+const currentUserId = ref('')
 const canReviewRequests = ref(false)
 const canViewRequests = ref(false)
 const managedUsers = ref<ManagedUser[]>([])
@@ -259,11 +260,12 @@ async function loadVideos() {
       throw new Error(`HTTP ${response.status}`)
     }
 
-    const data: { videos: Video[], canManageUsers?: boolean, canChangeUserRoles?: boolean, canAssignPrivilegedRoles?: boolean, canReviewRequests?: boolean, canViewRequests?: boolean } = await response.json()
+    const data: { videos: Video[], canManageUsers?: boolean, canChangeUserRoles?: boolean, canAssignPrivilegedRoles?: boolean, currentUserId?: string, canReviewRequests?: boolean, canViewRequests?: boolean } = await response.json()
     videos.value = data.videos
     canManageUsers.value = data.canManageUsers === true
     canChangeUserRoles.value = data.canChangeUserRoles === true
     canAssignPrivilegedRoles.value = data.canAssignPrivilegedRoles === true
+    currentUserId.value = data.currentUserId ?? ''
     canReviewRequests.value = data.canReviewRequests === true
     canViewRequests.value = data.canViewRequests === true
 
@@ -1121,7 +1123,7 @@ function openSchedule() {
           <div v-else class="user-list">
             <div v-for="user in managedUsers" :key="user.id" class="user-row">
               <span class="item-title">{{ user.email }}</span>
-              <select v-if="canChangeUserRoles && (canAssignPrivilegedRoles || user.role === 'producer' || user.role === 'operator')" :value="user.role" :aria-label="`${user.email}の役割`" @change="changeUserRole(user, $event)"><option value="producer">動画制作担当</option><option value="operator">運用担当</option><option v-if="canAssignPrivilegedRoles" value="admin">管理者</option><option v-if="canAssignPrivilegedRoles" value="mentor">メンター（管理者＋承認）</option></select>
+              <select v-if="canChangeUserRoles && user.id !== currentUserId" :value="user.role" :aria-label="`${user.email}の役割`" @change="changeUserRole(user, $event)"><option v-if="!canAssignPrivilegedRoles && user.role === 'admin'" value="admin" disabled>管理者（変更には管理者権限が必要）</option><option v-if="!canAssignPrivilegedRoles && user.role === 'mentor'" value="mentor" disabled>メンター（変更には管理者権限が必要）</option><option value="producer">動画制作担当</option><option value="operator">運用担当</option><option v-if="canAssignPrivilegedRoles" value="admin">管理者</option><option v-if="canAssignPrivilegedRoles" value="mentor">メンター（管理者＋承認）</option></select>
               <span v-else class="item-meta">{{ user.role }}</span>
             </div>
             <p v-if="!managedUsers.length" class="state-message muted">ユーザーがいません。</p>
