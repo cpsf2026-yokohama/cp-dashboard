@@ -1165,8 +1165,10 @@ export default {
           const role = body.role;
           if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 254 || !isUserRole(role)) {
             response = jsonError("A valid email and role are required", 400);
-          } else if (accessUser!.role === "mentor" && role !== "producer" && role !== "operator") {
-            response = jsonError("Mentors can only create producer or operator accounts", 403);
+          } else if (accessUser!.role === "admin" && role === "mentor") {
+            response = jsonError("Only mentors can create mentor accounts", 403);
+          } else if (accessUser!.role === "mentor" && role === "admin") {
+            response = jsonError("Mentors cannot create administrator accounts", 403);
           } else {
             const existing = await env.DB.prepare(`
               SELECT id FROM users WHERE lower(email) = lower(?) LIMIT 1
@@ -1215,8 +1217,10 @@ export default {
             response = jsonError("User not found", 404);
           } else if (accessUser!.role === "mentor" && user.id === accessUser!.id) {
             response = jsonError("Mentors cannot change their own role", 403);
-          } else if (accessUser!.role === "mentor" && body.role !== "producer" && body.role !== "operator") {
-            response = jsonError("Mentors may only assign producer or operator roles to other users", 403);
+          } else if (accessUser!.role === "admin" && body.role === "mentor") {
+            response = jsonError("Only mentors can assign the mentor role", 403);
+          } else if (accessUser!.role === "mentor" && body.role === "admin") {
+            response = jsonError("Mentors cannot assign the administrator role", 403);
           } else if (user.id === accessUser!.id && body.role === "mentor") {
             response = jsonError("You cannot grant yourself mentor privileges", 403);
           } else if (user.id === accessUser!.id && body.role !== "admin") {
@@ -1857,7 +1861,8 @@ export default {
           })),
           canManageUsers: accessUser!.role === "admin" || accessUser!.role === "mentor",
           canChangeUserRoles: accessUser!.role === "admin" || accessUser!.role === "mentor",
-          canAssignPrivilegedRoles: accessUser!.role === "admin",
+          canAssignAdminRole: accessUser!.role === "admin",
+          canAssignMentorRole: accessUser!.role === "mentor",
           currentUserId: accessUser!.id,
           canReviewRequests: accessUser!.role === "mentor",
           canViewRequests: accessUser!.role === "admin" || accessUser!.role === "mentor",

@@ -856,7 +856,7 @@ describe("Video API worker", () => {
     expect(roleUpdated).toBe(false);
   });
 
-  it("allows mentors to demote privileged users to ordinary roles but not promote them", async () => {
+  it("allows mentors to manage mentor roles but blocks admins from assigning mentor", async () => {
     const mentor = { id: "local-test-admin", email: "mentor@example.invalid", role: "mentor" };
     const targets = ["admin", "mentor"] as const;
     for (const role of targets) {
@@ -913,8 +913,73 @@ describe("Video API worker", () => {
       ACCESS_AUD: "",
     }, createExecutionContext());
 
-    expect(promotion.status).toBe(403);
-    expect(roleUpdated).toBe(false);
+    expect(promotion.status).toBe(200);
+    expect(roleUpdated).toBe(true);
+
+    let insertedRole: unknown;
+    const mentorCreateDb = {
+      prepare: (sql: string) => ({
+        bind: (...values: unknown[]) => ({
+          first: async () => sql.includes("AND role = 'mentor'") ? mentor : null,
+          run: async () => {
+            if (sql.includes("INSERT INTO users")) insertedRole = values[2];
+            return { success: true, meta: { changes: 1 } };
+          },
+        }),
+      }),
+    } as unknown as D1Database;
+    const mentorCreate = await worker.fetch(new IncomingRequest("http://127.0.0.1:8787/api/users", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: "new-mentor@example.invalid", role: "mentor" }),
+    }), {
+      ...env,
+      DB: mentorCreateDb,
+      LOCAL_AUTH_BYPASS: "true",
+      LOCAL_AUTH_BYPASS_ROLE: "mentor",
+      ACCESS_TEAM_DOMAIN: "",
+      ACCESS_AUD: "",
+    }, createExecutionContext());
+    expect(mentorCreate.status).toBe(201);
+    expect(insertedRole).toBe("mentor");
+
+    const admin = { id: "local-test-admin", email: "admin@example.invalid", role: "admin" };
+    let adminUpdatedRole = false;
+    const adminDb = {
+      prepare: (sql: string) => ({
+        bind: (..._values: unknown[]) => ({
+          first: async () => sql.includes("AND role = 'admin'") ? admin : ordinaryUser,
+          run: async () => { adminUpdatedRole = true; return { success: true, meta: { changes: 1 } }; },
+        }),
+      }),
+    } as unknown as D1Database;
+    const adminPromotion = await worker.fetch(new IncomingRequest("http://127.0.0.1:8787/api/users/target-producer", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ role: "mentor" }),
+    }), {
+      ...env,
+      DB: adminDb,
+      LOCAL_AUTH_BYPASS: "true",
+      ACCESS_TEAM_DOMAIN: "",
+      ACCESS_AUD: "",
+    }, createExecutionContext());
+
+    expect(adminPromotion.status).toBe(403);
+    expect(adminUpdatedRole).toBe(false);
+
+    const adminCreate = await worker.fetch(new IncomingRequest("http://127.0.0.1:8787/api/users", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: "another-mentor@example.invalid", role: "mentor" }),
+    }), {
+      ...env,
+      DB: adminDb,
+      LOCAL_AUTH_BYPASS: "true",
+      ACCESS_TEAM_DOMAIN: "",
+      ACCESS_AUD: "",
+    }, createExecutionContext());
+    expect(adminCreate.status).toBe(403);
   });
 
   it("forwards the original request and Access/Range headers through the Pages proxy", async () => {

@@ -59,7 +59,8 @@ const appBase = String(useRuntimeConfig().app.baseURL || '/').replace(/\/?$/, '/
 const activeTab = ref<'overview' | 'videos' | 'schedule' | 'users' | 'settings'>('overview')
 const canManageUsers = ref(false)
 const canChangeUserRoles = ref(false)
-const canAssignPrivilegedRoles = ref(false)
+const canAssignAdminRole = ref(false)
+const canAssignMentorRole = ref(false)
 const currentUserId = ref('')
 const canReviewRequests = ref(false)
 const canViewRequests = ref(false)
@@ -260,11 +261,12 @@ async function loadVideos() {
       throw new Error(`HTTP ${response.status}`)
     }
 
-    const data: { videos: Video[], canManageUsers?: boolean, canChangeUserRoles?: boolean, canAssignPrivilegedRoles?: boolean, currentUserId?: string, canReviewRequests?: boolean, canViewRequests?: boolean } = await response.json()
+    const data: { videos: Video[], canManageUsers?: boolean, canChangeUserRoles?: boolean, canAssignAdminRole?: boolean, canAssignMentorRole?: boolean, currentUserId?: string, canReviewRequests?: boolean, canViewRequests?: boolean } = await response.json()
     videos.value = data.videos
     canManageUsers.value = data.canManageUsers === true
     canChangeUserRoles.value = data.canChangeUserRoles === true
-    canAssignPrivilegedRoles.value = data.canAssignPrivilegedRoles === true
+    canAssignAdminRole.value = data.canAssignAdminRole === true
+    canAssignMentorRole.value = data.canAssignMentorRole === true
     currentUserId.value = data.currentUserId ?? ''
     canReviewRequests.value = data.canReviewRequests === true
     canViewRequests.value = data.canViewRequests === true
@@ -1110,7 +1112,7 @@ function openSchedule() {
             <label class="field"><span>メールアドレス</span><input v-model="newUserEmail" type="email" required maxlength="254" placeholder="メンバーのメールアドレス"></label>
             <label class="field">
               <span>役割</span>
-              <select v-model="newUserRole"><option value="producer">動画制作担当</option><option value="operator">運用担当</option><option v-if="canAssignPrivilegedRoles" value="admin">管理者</option><option v-if="canAssignPrivilegedRoles" value="mentor">メンター（管理者＋承認）</option></select>
+              <select v-model="newUserRole"><option value="producer">動画制作担当</option><option value="operator">運用担当</option><option v-if="canAssignAdminRole" value="admin">管理者</option><option v-if="canAssignMentorRole" value="mentor">メンター（管理者＋承認）</option></select>
             </label>
             <button :disabled="savingUser" class="button button-primary">{{ savingUser ? '登録中...' : '登録' }}</button>
           </form>
@@ -1123,7 +1125,7 @@ function openSchedule() {
           <div v-else class="user-list">
             <div v-for="user in managedUsers" :key="user.id" class="user-row">
               <span class="item-title">{{ user.email }}</span>
-              <select v-if="canChangeUserRoles && user.id !== currentUserId" :value="user.role" :aria-label="`${user.email}の役割`" @change="changeUserRole(user, $event)"><option v-if="!canAssignPrivilegedRoles && user.role === 'admin'" value="admin" disabled>管理者（変更には管理者権限が必要）</option><option v-if="!canAssignPrivilegedRoles && user.role === 'mentor'" value="mentor" disabled>メンター（変更には管理者権限が必要）</option><option value="producer">動画制作担当</option><option value="operator">運用担当</option><option v-if="canAssignPrivilegedRoles" value="admin">管理者</option><option v-if="canAssignPrivilegedRoles" value="mentor">メンター（管理者＋承認）</option></select>
+              <select v-if="canChangeUserRoles && user.id !== currentUserId" :value="user.role" :aria-label="`${user.email}の役割`" @change="changeUserRole(user, $event)"><option v-if="!canAssignAdminRole && user.role === 'admin'" value="admin" disabled>管理者（割り当てには管理者権限が必要）</option><option v-if="!canAssignMentorRole && user.role === 'mentor'" value="mentor" disabled>メンター（割り当てにはメンター権限が必要）</option><option value="producer">動画制作担当</option><option value="operator">運用担当</option><option v-if="canAssignAdminRole" value="admin">管理者</option><option v-if="canAssignMentorRole" value="mentor">メンター（管理者＋承認）</option></select>
               <span v-else class="item-meta">{{ user.role }}</span>
             </div>
             <p v-if="!managedUsers.length" class="state-message muted">ユーザーがいません。</p>
