@@ -75,7 +75,6 @@ const activeVerticalBanner = computed(() => props.pendingVerticalBannerUrl || pr
 
     <div class="preview-screen">
       <div v-if="settings.isBannerVisible && activeHorizontalBanner" class="preview-horizontal-banner">
-        <span>宣伝</span>
         <img :src="activeHorizontalBanner" alt="横型バナーのプレビュー">
       </div>
 
