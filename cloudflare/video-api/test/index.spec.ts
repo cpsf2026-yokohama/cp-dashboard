@@ -1158,6 +1158,11 @@ describe("Video API worker", () => {
         expect(uploadId).toBe("test-multipart-upload-id");
         return multipart;
       },
+      head: async () => ({
+        size: Array.from(uploaded.values()).reduce((total, part) => total + part.size, 0),
+        httpMetadata: { contentType: multipartOptions.contentType },
+        customMetadata: multipartOptions.customMetadata,
+      }),
       delete: async () => undefined,
     } as unknown as R2Bucket;
     const admin = { id: "local-test-admin", email: "local-test-admin@example.invalid", role: "admin" };

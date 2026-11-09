@@ -942,12 +942,22 @@ export default {
           } else {
             const key = `pending/banners/${route.token}`;
             const uploadedParts = parts as Array<{ partNumber: number; etag: string }>;
-            const object = await env.VIDEO_BUCKET.resumeMultipartUpload(key, body.uploadId).complete(uploadedParts);
+            await env.VIDEO_BUCKET.resumeMultipartUpload(key, body.uploadId).complete(uploadedParts);
             completedKey = key;
-            if (object.size !== fileSize || object.customMetadata?.uploadToken !== route.token ||
-                object.customMetadata?.kind !== route.kind || object.customMetadata?.requesterId !== accessUser!.id ||
-                object.customMetadata?.expectedSize !== String(fileSize) ||
-                !/^image\/(png|jpeg|webp|gif|avif)$/.test(object.httpMetadata?.contentType ?? "")) {
+            const object = await env.VIDEO_BUCKET.head(key);
+            const contentType = object?.httpMetadata?.contentType ?? "";
+            const customMetadata = object?.customMetadata;
+            const matchesUpload = customMetadata?.uploadToken === route.token &&
+              customMetadata.kind === route.kind &&
+              customMetadata.requesterId === accessUser!.id &&
+              customMetadata.expectedSize === String(fileSize);
+            if (!object || object.size !== fileSize || !matchesUpload || !/^image\/(png|jpeg|webp|gif|avif)$/.test(contentType)) {
+              console.error("Completed banner validation failed:", {
+                objectFound: object !== null,
+                sizeMatches: object?.size === fileSize,
+                metadataMatchesUpload: matchesUpload,
+                contentTypeValid: /^image\/(png|jpeg|webp|gif|avif)$/.test(contentType),
+              });
               await env.VIDEO_BUCKET.delete(key);
               completedKey = null;
               response = jsonError("Uploaded banner does not match the requested image", 400);
@@ -956,7 +966,7 @@ export default {
                 const requestId = await createChangeRequest(env, accessUser!.id, "banner.upload", {
                   kind: route.kind,
                   stagingKey: key,
-                  contentType: object.httpMetadata?.contentType ?? "application/octet-stream",
+                  contentType,
                   sizeBytes: fileSize,
                 }, `${route.kind === "horizontal" ? "横" : "縦"}型バナーを更新`);
                 response = Response.json({ success: true, requestId, status: "pending" }, { status: 202 });
