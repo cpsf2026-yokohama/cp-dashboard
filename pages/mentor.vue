@@ -95,6 +95,9 @@ function currentBannerUrl(item: ChangeRequest) {
 function pendingBannerUrl(item: ChangeRequest) {
   return `${api}/change-requests/${encodeURIComponent(item.id)}/preview`
 }
+function bannerPreviewIsTooLarge(item: ChangeRequest) {
+  return typeof item.payload.sizeBytes === 'number' && item.payload.sizeBytes > 10 * 1024 * 1024
+}
 function hideUnavailableImage(event: Event, key: string) {
   if (event.currentTarget instanceof HTMLImageElement) event.currentTarget.style.display = 'none'
   failedImages.value = new Set([...failedImages.value, key])
@@ -211,7 +214,7 @@ onMounted(() => void loadRequests())
         <div v-if="bannerKind(item) && (item.kind === 'banner.upload' || item.kind === 'banner.delete')" class="banner-comparison" aria-label="バナー画像の変更比較">
           <figure><figcaption>現在</figcaption><img v-if="!failedImages.has(`${item.id}:current`)" :src="currentBannerUrl(item)" :alt="`${bannerKind(item) === 'horizontal' ? '横' : '縦'}バナーの現在の画像`" @error="hideUnavailableImage($event, `${item.id}:current`)"><p v-else class="image-result">現在の画像を読み込めません</p></figure>
           <div class="change-arrow" aria-hidden="true">→</div>
-          <figure><figcaption>変更後</figcaption><img v-if="item.kind === 'banner.upload' && !failedImages.has(`${item.id}:pending`)" :src="pendingBannerUrl(item)" :alt="`${bannerKind(item) === 'horizontal' ? '横' : '縦'}バナーの申請画像`" @error="hideUnavailableImage($event, `${item.id}:pending`)"><p v-else-if="item.kind === 'banner.upload'" class="image-result">申請画像を読み込めません</p><p v-else class="image-result">画像なし（削除）</p></figure>
+          <figure><figcaption>変更後</figcaption><img v-if="item.kind === 'banner.upload' && !bannerPreviewIsTooLarge(item) && !failedImages.has(`${item.id}:pending`)" :src="pendingBannerUrl(item)" :alt="`${bannerKind(item) === 'horizontal' ? '横' : '縦'}バナーの申請画像`" @error="hideUnavailableImage($event, `${item.id}:pending`)"><p v-else-if="item.kind === 'banner.upload' && bannerPreviewIsTooLarge(item)" class="image-result">大容量画像のためプレビューを省略（{{ (Number(item.payload.sizeBytes) / (1024 * 1024)).toFixed(1) }} MiB）</p><p v-else-if="item.kind === 'banner.upload'" class="image-result">申請画像を読み込めません</p><p v-else class="image-result">画像なし（削除）</p></figure>
         </div>
         <details v-if="details(item).length" open><summary>申請内容</summary><dl><template v-for="([label, value], index) in details(item)" :key="`${label}-${index}`"><dt>{{ label }}</dt><dd>{{ value }}</dd></template></dl></details>
         <div class="actions"><template v-if="item.isMine"><button class="reject" :disabled="busyId !== ''" @click="void cancel(item)">{{ busyId === item.id ? '処理中...' : '自分の申請を取り消す' }}</button></template><template v-else-if="canReview"><button class="reject" :disabled="busyId !== ''" @click="void decide(item, 'reject')">却下</button><button class="approve" :disabled="busyId !== ''" @click="void decide(item, 'approve')">{{ busyId === item.id ? '処理中...' : '承認して反映' }}</button></template></div>

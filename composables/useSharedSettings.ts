@@ -149,6 +149,8 @@ function getSettingsApiBase(): string {
 }
 
 export type SharedBannerKind = 'horizontal' | 'vertical';
+const maxSharedBannerBytes = 1024 * 1024 * 1024;
+const fallbackBannerUploadPartBytes = 8 * 1024 * 1024;
 export type SharedChimeKind = 'chime' | 'pre-chime';
 export interface SharedChimeInfo {
   url: string;
@@ -223,15 +225,87 @@ export async function loadSharedBanners(): Promise<Record<SharedBannerKind, Shar
   return result;
 }
 
-export async function uploadSharedBanner(kind: SharedBannerKind, file: File): Promise<void> {
-  if (!file.type.startsWith('image/')) throw new Error('画像ファイルを選択してください');
-  if (file.size === 0 || file.size > 10 * 1024 * 1024) throw new Error('画像は10 MiB以下のファイルを選択してください');
-  const response = await fetch(`${getSettingsApiBase()}/banners/${kind}`, {
-    method: 'PUT',
-    headers: { 'Content-Type': file.type },
-    body: file,
+async function bannerUploadResponseError(response: Response, action: string): Promise<Error> {
+  const result: unknown = await response.json().catch(() => ({}));
+  const message = typeof result === 'object' && result !== null && 'error' in result && typeof result.error === 'string'
+    ? result.error
+    : `${action}に失敗しました (${response.status})`;
+  return new Error(message);
+}
+
+export async function uploadSharedBanner(
+  kind: SharedBannerKind,
+  file: File,
+  onProgress?: (uploadedBytes: number, totalBytes: number) => void,
+): Promise<void> {
+  if (!/^image\/(png|jpeg|webp|gif|avif)$/.test(file.type)) throw new Error('PNG/JPEG/WebP/GIF/AVIF画像を選択してください');
+  if (file.size === 0 || file.size > maxSharedBannerBytes) throw new Error('画像は1 GiB以下のファイルを選択してください');
+
+  const apiBase = getSettingsApiBase();
+  const startResponse = await fetch(`${apiBase}/banners/${kind}/uploads`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ contentType: file.type, fileSize: file.size }),
   });
-  if (!response.ok) throw new Error(`バナー画像を保存できませんでした (${response.status})`);
+  if (!startResponse.ok) throw await bannerUploadResponseError(startResponse, 'アップロードの開始');
+  const startPayload: unknown = await startResponse.json();
+  if (typeof startPayload !== 'object' || startPayload === null || !('uploadToken' in startPayload)
+    || typeof startPayload.uploadToken !== 'string' || !('uploadId' in startPayload) || typeof startPayload.uploadId !== 'string'
+    || !('partSize' in startPayload) || typeof startPayload.partSize !== 'number'
+    || !Number.isSafeInteger(startPayload.partSize) || startPayload.partSize < 5 * 1024 * 1024
+    || startPayload.partSize > fallbackBannerUploadPartBytes) {
+    throw new Error('アップロードの開始応答を確認できません');
+  }
+
+  const { uploadToken, uploadId, partSize } = startPayload;
+  const uploadPath = `${apiBase}/banners/${kind}/uploads/${encodeURIComponent(uploadToken)}`;
+  const partCount = Math.ceil(file.size / partSize);
+  const uploadedParts: Array<{ partNumber: number; etag: string }> = new Array(partCount);
+  let uploadedBytes = 0;
+
+  try {
+    const batchSize = 3;
+    for (let firstPart = 0; firstPart < partCount; firstPart += batchSize) {
+      const count = Math.min(batchSize, partCount - firstPart);
+      const results = await Promise.allSettled(Array.from({ length: count }, async (_, offset) => {
+        const index = firstPart + offset;
+        const partNumber = index + 1;
+        const start = index * partSize;
+        const end = Math.min(start + partSize, file.size);
+        const response = await fetch(`${uploadPath}/parts/${partNumber}?uploadId=${encodeURIComponent(uploadId)}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/octet-stream' },
+          body: file.slice(start, end),
+        });
+        if (!response.ok) throw await bannerUploadResponseError(response, `画像の分割アップロード ${partNumber}`);
+        const payload: unknown = await response.json();
+        if (typeof payload !== 'object' || payload === null || !('partNumber' in payload) || payload.partNumber !== partNumber
+          || !('etag' in payload) || typeof payload.etag !== 'string' || payload.etag.length === 0) {
+          throw new Error(`画像の分割アップロード ${partNumber} の応答を確認できません`);
+        }
+        return { partNumber, etag: payload.etag, byteLength: end - start };
+      }));
+
+      const failed = results.find((result): result is PromiseRejectedResult => result.status === 'rejected');
+      if (failed) throw failed.reason instanceof Error ? failed.reason : new Error('画像の分割アップロードに失敗しました');
+      for (const result of results) {
+        if (result.status !== 'fulfilled') continue;
+        uploadedParts[result.value.partNumber - 1] = { partNumber: result.value.partNumber, etag: result.value.etag };
+        uploadedBytes += result.value.byteLength;
+      }
+      onProgress?.(uploadedBytes, file.size);
+    }
+
+    const completeResponse = await fetch(`${uploadPath}/complete`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ uploadId, fileSize: file.size, parts: uploadedParts }),
+    });
+    if (!completeResponse.ok) throw await bannerUploadResponseError(completeResponse, '画像アップロードの確定');
+  } catch (error) {
+    await fetch(`${uploadPath}?uploadId=${encodeURIComponent(uploadId)}`, { method: 'DELETE' }).catch(() => undefined);
+    throw error;
+  }
 }
 
 export async function deleteSharedBanner(kind: SharedBannerKind): Promise<void> {

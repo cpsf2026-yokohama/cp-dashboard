@@ -1126,6 +1126,119 @@ describe("Video API worker", () => {
     expect(remove.status).toBe(202);
   });
 
+  it("uploads large banner images to R2 in parts and creates a mentor approval request", async () => {
+    const fileSize = 11 * 1024 * 1024;
+    const uploaded = new Map<number, { size: number; etag: string }>();
+    const multipartOptions: { contentType: string; customMetadata: Record<string, string> } = { contentType: "", customMetadata: {} };
+    let requestValues: unknown[] = [];
+    let abortCount = 0;
+    const multipart = {
+      uploadId: "test-multipart-upload-id",
+      uploadPart: async (partNumber: number, body: ArrayBuffer | ArrayBufferView) => {
+        const size = body.byteLength;
+        const etag = `part-${partNumber}-etag`;
+        uploaded.set(partNumber, { size, etag });
+        return { partNumber, etag };
+      },
+      complete: async (parts: Array<{ partNumber: number; etag: string }>) => ({
+        key: "pending/banners/test-token",
+        size: parts.reduce((total, part) => total + (uploaded.get(part.partNumber)?.size ?? 0), 0),
+        httpMetadata: { contentType: multipartOptions.contentType },
+        customMetadata: multipartOptions.customMetadata,
+      }),
+      abort: async () => { abortCount += 1; },
+    };
+    const bucket = {
+      createMultipartUpload: async (_key: string, options: { httpMetadata?: { contentType?: string }; customMetadata?: Record<string, string> }) => {
+        multipartOptions.contentType = options.httpMetadata?.contentType ?? "";
+        multipartOptions.customMetadata = options.customMetadata ?? {};
+        return multipart;
+      },
+      resumeMultipartUpload: (_key: string, uploadId: string) => {
+        expect(uploadId).toBe("test-multipart-upload-id");
+        return multipart;
+      },
+      delete: async () => undefined,
+    } as unknown as R2Bucket;
+    const admin = { id: "local-test-admin", email: "local-test-admin@example.invalid", role: "admin" };
+    const db = {
+      prepare: (sql: string) => {
+        let values: unknown[] = [];
+        const statement = {
+          bind: (...boundValues: unknown[]) => { values = boundValues; return statement; },
+          first: async () => sql.includes("WHERE id = ? AND role = 'admin'") ? admin : null,
+          run: async () => {
+            if (sql.includes("INSERT INTO change_requests")) requestValues = values;
+            return { success: true, meta: { changes: 1 } };
+          },
+        };
+        return statement;
+      },
+    } as unknown as D1Database;
+    const localEnv = {
+      ...env,
+      DB: db,
+      VIDEO_BUCKET: bucket,
+      LOCAL_AUTH_BYPASS: "true",
+      ACCESS_TEAM_DOMAIN: "",
+      ACCESS_AUD: "",
+    };
+
+    const start = await worker.fetch(new IncomingRequest("http://127.0.0.1:8787/api/banners/vertical/uploads", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ contentType: "image/png", fileSize }),
+    }), localEnv, createExecutionContext());
+    expect(start.status).toBe(201);
+    const startBody = await start.json() as { uploadToken: string; uploadId: string; partSize: number };
+    expect(startBody.partSize).toBe(8 * 1024 * 1024);
+
+    const chunks = [new Uint8Array(8 * 1024 * 1024), new Uint8Array(3 * 1024 * 1024)];
+    const parts: Array<{ partNumber: number; etag: string }> = [];
+    for (const [index, chunk] of chunks.entries()) {
+      const part = await worker.fetch(new IncomingRequest(
+        `http://127.0.0.1:8787/api/banners/vertical/uploads/${startBody.uploadToken}/parts/${index + 1}?uploadId=${startBody.uploadId}`,
+        { method: "PUT", headers: { "Content-Type": "application/octet-stream" }, body: chunk },
+      ), localEnv, createExecutionContext());
+      expect(part.status).toBe(200);
+      parts.push(await part.json() as { partNumber: number; etag: string });
+    }
+
+    const complete = await worker.fetch(new IncomingRequest(
+      `http://127.0.0.1:8787/api/banners/vertical/uploads/${startBody.uploadToken}/complete`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ uploadId: startBody.uploadId, fileSize, parts }),
+      },
+    ), localEnv, createExecutionContext());
+    expect(complete.status).toBe(202);
+    expect(requestValues[2]).toBe("banner.upload");
+    expect(JSON.parse(String(requestValues[4]))).toMatchObject({ kind: "vertical", sizeBytes: fileSize });
+
+    const tooLarge = await worker.fetch(new IncomingRequest("http://127.0.0.1:8787/api/banners/vertical/uploads", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ contentType: "image/png", fileSize: 1024 * 1024 * 1024 + 1 }),
+    }), localEnv, createExecutionContext());
+    expect(tooLarge.status).toBe(413);
+
+    const maxSize = 1024 * 1024 * 1024;
+    const maxSizeStart = await worker.fetch(new IncomingRequest("http://127.0.0.1:8787/api/banners/horizontal/uploads", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ contentType: "image/webp", fileSize: maxSize }),
+    }), localEnv, createExecutionContext());
+    expect(maxSizeStart.status).toBe(201);
+    const maxSizeUpload = await maxSizeStart.json() as { uploadToken: string; uploadId: string };
+    const abort = await worker.fetch(new IncomingRequest(
+      `http://127.0.0.1:8787/api/banners/horizontal/uploads/${maxSizeUpload.uploadToken}?uploadId=${maxSizeUpload.uploadId}`,
+      { method: "DELETE" },
+    ), localEnv, createExecutionContext());
+    expect(abort.status).toBe(204);
+    expect(abortCount).toBe(1);
+  });
+
 
   it("saves shared settings for a local admin", async () => {
     const settings = { isChimeEnabled: true };

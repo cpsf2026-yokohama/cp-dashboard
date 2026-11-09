@@ -91,6 +91,8 @@ const chimeBusy = ref<SharedChimeKind | null>(null)
 const pendingBannerPreviewUrls = ref<Record<SharedBannerKind, string | null>>({ horizontal: null, vertical: null })
 const showDashboardPreview = ref(false)
 const bannerUploading = ref<SharedBannerKind | null>(null)
+const bannerUploadProgress = ref(0)
+const bannerUploadPreviewOmitted = ref<Record<SharedBannerKind, boolean>>({ horizontal: false, vertical: false })
 const bannerDeleting = ref<SharedBannerKind | null>(null)
 const settingLabels: Record<keyof SharedSettingsPolicy, string> = {
   countdownDates: '日付指定カウントダウン',
@@ -354,19 +356,25 @@ async function uploadBanner(kind: SharedBannerKind, event: Event) {
   }
   const previousPreviewUrl = pendingBannerPreviewUrls.value[kind]
   if (previousPreviewUrl) URL.revokeObjectURL(previousPreviewUrl)
-  pendingBannerPreviewUrls.value[kind] = URL.createObjectURL(file)
+  bannerUploadPreviewOmitted.value[kind] = file.size > 10 * 1024 * 1024
+  pendingBannerPreviewUrls.value[kind] = bannerUploadPreviewOmitted.value[kind] ? null : URL.createObjectURL(file)
   bannerUploading.value = kind
+  bannerUploadProgress.value = 0
   try {
-    await uploadSharedBanner(kind, file)
+    await uploadSharedBanner(kind, file, (uploadedBytes, totalBytes) => {
+      bannerUploadProgress.value = Math.floor((uploadedBytes / totalBytes) * 100)
+    })
     bannerInfo.value = await loadSharedBanners()
     showNotice('バナーの変更を申請しました。メンターの承認後にサイトへ反映されます。')
   } catch (error) {
     const failedPreviewUrl = pendingBannerPreviewUrls.value[kind]
     if (failedPreviewUrl) URL.revokeObjectURL(failedPreviewUrl)
     pendingBannerPreviewUrls.value[kind] = null
+    bannerUploadPreviewOmitted.value[kind] = false
     showNotice(`バナーを保存できませんでした：${error instanceof Error ? error.message : '不明なエラー'}`, true)
   } finally {
     bannerUploading.value = null
+    bannerUploadProgress.value = 0
     input.value = ''
   }
 }
@@ -1020,7 +1028,7 @@ function openSchedule() {
             </div>
             <div class="admin-setting-block">
               <div class="section-heading">
-                <div><h3>バナー画像</h3><p class="help">画像はサーバーに保存され、各サイトへ自動配信されます。PNG・JPEG・WebP・GIF・AVIF、10 MiB以下。</p></div>
+                <div><h3>バナー画像</h3><p class="help">画像は分割してサーバーへ保存し、メンター承認後に各サイトへ配信します。PNG・JPEG・WebP・GIF・AVIF、1 GiB以下。</p></div>
               </div>
               <div class="banner-management-grid">
                 <article v-for="item in [
@@ -1028,14 +1036,16 @@ function openSchedule() {
                   { kind: 'vertical' as const, title: '縦型バナー', recommendation: '推奨 920 × 1600 px' },
                 ]" :key="item.kind" class="banner-management-card">
                   <div class="banner-preview">
-                    <img v-if="pendingBannerPreviewUrls[item.kind] || bannerInfo[item.kind]" :src="pendingBannerPreviewUrls[item.kind] || bannerInfo[item.kind]!.url" :alt="`${item.title}${pendingBannerPreviewUrls[item.kind] ? 'の申請画像' : ''}のプレビュー`">
+                    <img v-if="pendingBannerPreviewUrls[item.kind] || (bannerInfo[item.kind] && !bannerUploadPreviewOmitted[item.kind])" :src="pendingBannerPreviewUrls[item.kind] || bannerInfo[item.kind]!.url" :alt="`${item.title}${pendingBannerPreviewUrls[item.kind] ? 'の申請画像' : ''}のプレビュー`">
+                    <span v-else-if="bannerUploadPreviewOmitted[item.kind]" class="help">大きな画像のためプレビューを省略しています</span>
                     <span v-else class="help">画像は未登録です</span>
                   </div>
                   <div class="section-heading">
-                    <div><h4>{{ item.title }}</h4><p class="help">{{ pendingBannerPreviewUrls[item.kind] ? '今回の申請画像（この画面でプレビュー中）' : bannerInfo[item.kind] ? `${(bannerInfo[item.kind]!.size / (1024 * 1024)).toFixed(2)} MiB` : item.recommendation }}</p></div>
+                    <div><h4>{{ item.title }}</h4><p class="help">{{ bannerUploadPreviewOmitted[item.kind] ? '大容量の申請画像（プレビュー省略）' : pendingBannerPreviewUrls[item.kind] ? '今回の申請画像（この画面でプレビュー中）' : bannerInfo[item.kind] ? `${(bannerInfo[item.kind]!.size / (1024 * 1024)).toFixed(2)} MiB` : item.recommendation }}</p></div>
                     <button v-if="bannerInfo[item.kind]" class="button button-small button-danger" :disabled="bannerDeleting !== null || bannerUploading !== null" @click="void removeBanner(item.kind)">{{ bannerDeleting === item.kind ? '削除中...' : '画像を削除' }}</button>
                   </div>
                   <label class="field"><span>{{ bannerInfo[item.kind] ? '画像を差し替え' : '画像を追加' }}</span><input type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/avif" :disabled="bannerUploading !== null || bannerDeleting !== null" @change="uploadBanner(item.kind, $event)"></label>
+                  <p v-if="bannerUploading === item.kind" class="help" role="status">アップロード中 {{ bannerUploadProgress }}%</p>
                   <p class="help">{{ item.recommendation }}</p>
                 </article>
               </div>

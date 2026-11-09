@@ -19,7 +19,9 @@ const allowedOrigin = "http://localhost:3000";
 const localAdminId = "local-test-admin";
 const bannerKinds = ["horizontal", "vertical"] as const;
 type BannerKind = (typeof bannerKinds)[number];
-const maxBannerBytes = 10 * 1024 * 1024;
+const maxBannerBytes = 1024 * 1024 * 1024;
+const maxBannerSingleRequestBytes = 10 * 1024 * 1024;
+const bannerUploadPartBytes = 8 * 1024 * 1024;
 const chimeKinds = ["chime", "pre-chime"] as const;
 type ChimeKind = (typeof chimeKinds)[number];
 const maxChimeBytes = 10 * 1024 * 1024;
@@ -27,6 +29,60 @@ const maxChimeBytes = 10 * 1024 * 1024;
 function bannerKindFromPath(pathname: string): BannerKind | null {
   const match = /^\/api\/banners\/(horizontal|vertical)$/.exec(pathname);
   return (match?.[1] as BannerKind | undefined) ?? null;
+}
+
+function bannerUploadStartKindFromPath(pathname: string): BannerKind | null {
+  const match = /^\/api\/banners\/(horizontal|vertical)\/uploads$/.exec(pathname);
+  return (match?.[1] as BannerKind | undefined) ?? null;
+}
+
+function bannerUploadTokenFromPath(pathname: string, action: "part" | "complete" | "abort"):
+  { kind: BannerKind; token: string; partNumber?: number } | null {
+  const match = action === "part"
+    ? /^\/api\/banners\/(horizontal|vertical)\/uploads\/([0-9a-f-]{36})\/parts\/(\d+)$/.exec(pathname)
+    : action === "complete"
+      ? /^\/api\/banners\/(horizontal|vertical)\/uploads\/([0-9a-f-]{36})\/complete$/.exec(pathname)
+      : /^\/api\/banners\/(horizontal|vertical)\/uploads\/([0-9a-f-]{36})$/.exec(pathname);
+  if (!match) return null;
+  return {
+    kind: match[1] as BannerKind,
+    token: match[2],
+    ...(action === "part" ? { partNumber: Number(match[3]) } : {}),
+  };
+}
+
+class PayloadTooLargeError extends Error {}
+
+async function readRequestBodyAtMost(request: Request, maxBytes: number): Promise<ArrayBuffer | null> {
+  const contentLength = Number(request.headers.get("Content-Length") ?? 0);
+  if (contentLength > maxBytes) return null;
+  if (!request.body) return new ArrayBuffer(0);
+
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let byteLength = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (byteLength + value.byteLength > maxBytes) {
+        await reader.cancel();
+        return null;
+      }
+      chunks.push(value);
+      byteLength += value.byteLength;
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  const output = new Uint8Array(byteLength);
+  let offset = 0;
+  for (const chunk of chunks) {
+    output.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return output.buffer;
 }
 
 function chimeKindFromPath(pathname: string): ChimeKind | null {
@@ -131,6 +187,10 @@ export function requiresAccessAuthentication(method: string, pathname: string): 
     (method === "POST" && ["/api/schedules", "/api/videos", "/api/users"].includes(pathname)) ||
     (method === "DELETE" && pathname.startsWith("/api/schedules/") && pathname !== "/api/schedules/") ||
     (method === "DELETE" && /^\/api\/videos\/[^/]+$/.test(pathname)) ||
+    (method === "POST" && bannerUploadStartKindFromPath(pathname) !== null) ||
+    (method === "PUT" && bannerUploadTokenFromPath(pathname, "part") !== null) ||
+    (method === "POST" && bannerUploadTokenFromPath(pathname, "complete") !== null) ||
+    (method === "DELETE" && bannerUploadTokenFromPath(pathname, "abort") !== null) ||
     (method === "PATCH" && /^\/api\/users\/[^/]+$/.test(pathname))
   );
 }
@@ -143,6 +203,10 @@ export function hasRoleForRoute(user: Pick<ApiUser, "role">, method: string, pat
     (method === "PUT" && pathname === "/api/settings") ||
     ((method === "PUT" || method === "DELETE") && /^\/api\/banners\/(horizontal|vertical)$/.test(pathname)) ||
     ((method === "PUT" || method === "DELETE") && /^\/api\/chimes\/(chime|pre-chime)$/.test(pathname)) ||
+    (method === "POST" && bannerUploadStartKindFromPath(pathname) !== null) ||
+    (method === "PUT" && bannerUploadTokenFromPath(pathname, "part") !== null) ||
+    (method === "POST" && bannerUploadTokenFromPath(pathname, "complete") !== null) ||
+    (method === "DELETE" && bannerUploadTokenFromPath(pathname, "abort") !== null) ||
     (method === "GET" && pathname === "/api/users")
   ) {
     return user.role === "admin" || user.role === "mentor";
@@ -801,6 +865,128 @@ export default {
           response = jsonError(error instanceof Error ? error.message : "Failed to apply request", 409);
         }
       }
+    } else if (request.method === "POST" && bannerUploadStartKindFromPath(url.pathname) !== null) {
+      const kind = bannerUploadStartKindFromPath(url.pathname)!;
+      try {
+        const body: unknown = await request.json();
+        if (typeof body !== "object" || body === null || !("contentType" in body) || !("fileSize" in body)) {
+          response = jsonError("contentType and fileSize are required", 400);
+        } else {
+          const contentType = typeof body.contentType === "string" ? body.contentType.trim().toLowerCase() : "";
+          const fileSize = body.fileSize;
+          if (!/^image\/(png|jpeg|webp|gif|avif)$/.test(contentType) || typeof fileSize !== "number" || !Number.isSafeInteger(fileSize) || fileSize < 1) {
+            response = jsonError("A supported image type and valid file size are required", 400);
+          } else if (fileSize > maxBannerBytes) {
+            response = jsonError("Banner image must be 1 GiB or smaller", 413);
+          } else {
+            const token = crypto.randomUUID();
+            const key = `pending/banners/${token}`;
+            const upload = await env.VIDEO_BUCKET.createMultipartUpload(key, {
+              httpMetadata: { contentType },
+              customMetadata: {
+                kind,
+                uploadToken: token,
+                expectedSize: String(fileSize),
+                requesterId: accessUser!.id,
+              },
+            });
+            response = Response.json({ uploadToken: token, uploadId: upload.uploadId, partSize: bannerUploadPartBytes }, { status: 201 });
+          }
+        }
+      } catch (error) {
+        console.error("Failed to start banner upload:", error);
+        response = jsonError("Failed to start banner upload", 500);
+      }
+    } else if (request.method === "PUT" && bannerUploadTokenFromPath(url.pathname, "part")) {
+      const route = bannerUploadTokenFromPath(url.pathname, "part")!;
+      const uploadId = url.searchParams.get("uploadId") ?? "";
+      if (!uploadId || uploadId.length > 512 || !Number.isInteger(route.partNumber) || route.partNumber! < 1 ||
+          route.partNumber! > Math.ceil(maxBannerBytes / bannerUploadPartBytes)) {
+        response = jsonError("Invalid multipart upload part", 400);
+      } else {
+        try {
+          const bytes = await readRequestBodyAtMost(request, bannerUploadPartBytes);
+          if (!bytes) {
+            response = jsonError("Banner upload parts must be 8 MiB or smaller", 413);
+          } else if (bytes.byteLength < 1) {
+            response = jsonError("Banner upload parts must not be empty", 400);
+          } else {
+            const key = `pending/banners/${route.token}`;
+            const part = await env.VIDEO_BUCKET.resumeMultipartUpload(key, uploadId).uploadPart(route.partNumber!, bytes);
+            response = Response.json({ partNumber: part.partNumber, etag: part.etag });
+          }
+        } catch (error) {
+          console.error("Failed to upload banner part:", error);
+          response = jsonError("Failed to upload banner part", 400);
+        }
+      }
+    } else if (request.method === "POST" && bannerUploadTokenFromPath(url.pathname, "complete")) {
+      const route = bannerUploadTokenFromPath(url.pathname, "complete")!;
+      let completedKey: string | null = null;
+      try {
+        const body: unknown = await request.json();
+        if (typeof body !== "object" || body === null || !("uploadId" in body) || !("fileSize" in body) || !("parts" in body) ||
+            typeof body.uploadId !== "string" || body.uploadId.length > 512 || typeof body.fileSize !== "number" ||
+            !Number.isSafeInteger(body.fileSize) || body.fileSize < 1 || body.fileSize > maxBannerBytes || !Array.isArray(body.parts)) {
+          response = jsonError("Invalid multipart completion request", 400);
+        } else {
+          const fileSize = body.fileSize;
+          const expectedPartCount = Math.ceil(fileSize / bannerUploadPartBytes);
+          const parts = body.parts as unknown[];
+          const validParts = parts.length === expectedPartCount && parts.every((part, index) =>
+            typeof part === "object" && part !== null && "partNumber" in part && part.partNumber === index + 1 &&
+            "etag" in part && typeof part.etag === "string" && part.etag.length > 0 && part.etag.length <= 256,
+          );
+          if (!validParts) {
+            response = jsonError("The uploaded parts do not match the file size", 400);
+          } else {
+            const key = `pending/banners/${route.token}`;
+            const uploadedParts = parts as Array<{ partNumber: number; etag: string }>;
+            const object = await env.VIDEO_BUCKET.resumeMultipartUpload(key, body.uploadId).complete(uploadedParts);
+            completedKey = key;
+            if (object.size !== fileSize || object.customMetadata?.uploadToken !== route.token ||
+                object.customMetadata?.kind !== route.kind || object.customMetadata?.requesterId !== accessUser!.id ||
+                object.customMetadata?.expectedSize !== String(fileSize) ||
+                !/^image\/(png|jpeg|webp|gif|avif)$/.test(object.httpMetadata?.contentType ?? "")) {
+              await env.VIDEO_BUCKET.delete(key);
+              completedKey = null;
+              response = jsonError("Uploaded banner does not match the requested image", 400);
+            } else {
+              try {
+                const requestId = await createChangeRequest(env, accessUser!.id, "banner.upload", {
+                  kind: route.kind,
+                  stagingKey: key,
+                  contentType: object.httpMetadata?.contentType ?? "application/octet-stream",
+                  sizeBytes: fileSize,
+                }, `${route.kind === "horizontal" ? "横" : "縦"}型バナーを更新`);
+                response = Response.json({ success: true, requestId, status: "pending" }, { status: 202 });
+              } catch (error) {
+                await env.VIDEO_BUCKET.delete(key).catch(() => undefined);
+                completedKey = null;
+                throw error;
+              }
+            }
+          }
+        }
+      } catch (error) {
+        if (completedKey) await env.VIDEO_BUCKET.delete(completedKey).catch(() => undefined);
+        console.error("Failed to complete banner upload:", error);
+        response = jsonError("Failed to complete banner upload", 400);
+      }
+    } else if (request.method === "DELETE" && bannerUploadTokenFromPath(url.pathname, "abort")) {
+      const route = bannerUploadTokenFromPath(url.pathname, "abort")!;
+      const uploadId = url.searchParams.get("uploadId") ?? "";
+      if (!uploadId || uploadId.length > 512) {
+        response = jsonError("uploadId is required", 400);
+      } else {
+        try {
+          await env.VIDEO_BUCKET.resumeMultipartUpload(`pending/banners/${route.token}`, uploadId).abort();
+          response = new Response(null, { status: 204 });
+        } catch (error) {
+          console.error("Failed to abort banner upload:", error);
+          response = jsonError("Failed to abort banner upload", 400);
+        }
+      }
     } else if (isDashboardMutation(request.method, url.pathname)) {
       let stagingKeyToCleanup: string | null = null;
       try {
@@ -844,8 +1030,10 @@ export default {
           kind = "banner.delete"; summary = `${bannerKind === "horizontal" ? "横" : "縦"}型バナーを削除`; payload = { kind: bannerKind };
         } else if (bannerKind && request.method === "PUT") {
           const contentType = request.headers.get("Content-Type")?.split(";")[0].trim().toLowerCase() ?? "";
-          const bytes = await request.arrayBuffer();
-          if (!/^image\/(png|jpeg|webp|gif|avif)$/.test(contentType) || bytes.byteLength < 1 || bytes.byteLength > maxBannerBytes) throw new Error("PNG/JPEG/WebP/GIF/AVIF画像（10 MiB以下）を指定してください");
+          if (!/^image\/(png|jpeg|webp|gif|avif)$/.test(contentType)) throw new Error("PNG/JPEG/WebP/GIF/AVIF画像を指定してください");
+          const bytes = await readRequestBodyAtMost(request, maxBannerSingleRequestBytes);
+          if (!bytes) throw new PayloadTooLargeError("画像変更にはmultipartアップロードを使用してください（単一リクエストは10 MiB以下）");
+          if (bytes.byteLength < 1) throw new Error("画像ファイルが空です");
           const stagingKey = `pending/${crypto.randomUUID()}`;
           stagingKeyToCleanup = stagingKey;
           await env.VIDEO_BUCKET.put(stagingKey, bytes, { httpMetadata: { contentType } });
@@ -908,7 +1096,9 @@ export default {
         response = Response.json({ success: true, requestId: id, status: "pending", message: "メンターの承認待ちです" }, { status: 202 });
       } catch (error) {
         if (stagingKeyToCleanup) await env.VIDEO_BUCKET.delete(stagingKeyToCleanup).catch(() => undefined);
-        response = jsonError(error instanceof Error ? error.message : "Invalid change request", 400);
+        response = error instanceof PayloadTooLargeError
+          ? jsonError(error.message, 413)
+          : jsonError(error instanceof Error ? error.message : "Invalid change request", 400);
       }
 
 
@@ -1000,12 +1190,12 @@ export default {
         const contentLength = Number(request.headers.get("Content-Length") ?? 0);
         if (!/^image\/(png|jpeg|webp|gif|avif)$/.test(contentType)) {
           response = jsonError("Only PNG, JPEG, WebP, GIF, and AVIF images are allowed", 415);
-        } else if (contentLength > maxBannerBytes) {
+        } else if (contentLength > maxBannerSingleRequestBytes) {
           response = jsonError("Banner image must be 10 MiB or smaller", 413);
         } else {
           try {
             const bytes = await request.arrayBuffer();
-            if (bytes.byteLength === 0 || bytes.byteLength > maxBannerBytes) {
+            if (bytes.byteLength === 0 || bytes.byteLength > maxBannerSingleRequestBytes) {
               response = jsonError("Banner image must be between 1 byte and 10 MiB", 413);
             } else {
               await env.VIDEO_BUCKET.put(key, bytes, { httpMetadata: { contentType } });
