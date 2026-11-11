@@ -190,3 +190,9 @@ arduino-sender/        センサー送信側のファームウェア
 - 気象データ：[気象庁](https://www.jma.go.jp/bosai/)。利用条件は[気象庁ウェブサービス利用規約](https://www.jma.go.jp/jma/kishou/info/coment.html)を参照してください。
 - フォント：Inter（Copyright 2020 The Inter Project Authors）とM PLUS Rounded 1c。[SIL Open Font License 1.1](https://scripts.sil.org/OFL)。
 - 同梱の効果音：[OtoLogic](https://otologic.jp/)（[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)）。
+
+### 青い炎のテーマ
+
+「設定」の「テーマ」で **blue-flame** を選択すると、黒背景・白文字に、体育祭バナーを参考にした青い炎が画面下端で揺れます。大画面では左側のテーマ欄からも選択できます。選択はこのブラウザーに保存されます。元に戻す場合は **dash** を選択してください。
+
+炎は通常の Canvas 2D で描く背景です。Chrome の実験機能や HTML-in-Canvas の有効化は不要です。時計・タイマー・設定は通常の HTML として操作できます。OS の「視差効果を減らす」などの動きを減らす設定では静止し、非表示タブ・予約動画の表示中は描画を停止します。描画は最大30fps、バッファ幅は最大1920pxです。

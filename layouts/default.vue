@@ -1,6 +1,9 @@
 <template>
-  <div class="min-h-[100dvh]" :style="{ 'font-family': fontFamily }">
-    <slot></slot>
+  <div class="min-h-[100dvh] dashboard-layout" :class="{ 'blue-flame-layout': colorMode.value === 'blue-flame' }" :style="{ 'font-family': fontFamily }">
+    <BlueFlameBackground v-if="colorMode.value === 'blue-flame'" :active="backgroundActive" />
+    <div class="dashboard-content">
+      <slot></slot>
+    </div>
   </div>
   <div id="effect">
   </div>
@@ -8,6 +11,9 @@
 
 <script setup lang="ts">
 import { useIntervalFn, type Pausable } from '@vueuse/core'
+
+const colorMode = useColorMode();
+withDefaults(defineProps<{ backgroundActive?: boolean }>(), { backgroundActive: true });
 
 // 選択されているエフェクト
 const selectedEffect = screenEffect();
@@ -75,6 +81,26 @@ const setFont = async (font: string) => {
 </script>
 
 <style>
+.blue-flame-layout {
+  isolation: isolate;
+  background: #050508;
+  color: #f4f7ff;
+}
+
+.blue-flame-layout > .dashboard-content {
+  position: relative;
+  z-index: 1;
+}
+
+/* Let the decorative background show through the dashboard, not dialogs. */
+.blue-flame-layout .dashboard-status {
+  background: transparent;
+}
+
+.blue-flame-layout .stat-title {
+  color: #b9c6d9;
+}
+
 body {
   background: none;
   overflow: hidden;

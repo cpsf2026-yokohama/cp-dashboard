@@ -3,6 +3,7 @@
  */
 export const themes = [
   'dash',
+  'blue-flame',
   'system',
   'light',
   'dark',
