@@ -265,7 +265,7 @@ onUnmounted(() => {
         <div class="grow m-2 flex flex-col justify-end gap-2">
           <button class="btn btn-neutral" onclick="window.location.replace(window.location.href)">再読み込み</button>
           <TimerSetting></TimerSetting>
-          <span>Copyright © 2024 CoreNion</span>
+          <span class="dashboard-credit">Copyright © 2024 CoreNion</span>
         </div>
       </div>
     </div>
@@ -289,8 +289,8 @@ onUnmounted(() => {
       </div>
       <clock class="grow m-auto"></clock>
       <TimerSetting></TimerSetting>
-      <div class="flex flex-row justify-center gap-5 my-3">
-        <span>Copyright © 2024 CoreNion</span>
+      <div class="dashboard-credit flex flex-row justify-center gap-5 my-3">
+        <span class="dashboard-credit">Copyright © 2024 CoreNion</span>
         <a href="https://github.com/CoreNion/cp-dashboard/" class="link">Source Code / Licence</a>
       </div>
     </div>
