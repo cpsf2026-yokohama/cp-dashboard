@@ -236,7 +236,7 @@ onUnmounted(() => {
 <template>
   <div id="snow"></div>
   <NuxtPwaManifest />
-  <NuxtLayout v-show="!activePlayback">
+  <NuxtLayout v-show="!activePlayback" :background-active="!activePlayback">
     <ClientOnly>
       <div v-if="!firstClick && !activePlayback" class="toast toast-top toast-center whitespace-normal z-50 w-full">
         <div class="alert alert-warning">
@@ -253,7 +253,7 @@ onUnmounted(() => {
     <!-- 大画面デバイスの表示 -->
     <div v-if="widthState >= 1280" class="min-h-[100dvh] flex flex-row text-center gap-2">
       <div class="basis-[20.0%] flex flex-row justify-between">
-        <status></status>
+        <status class="dashboard-status"></status>
       </div>
 
       <div class="grow m-auto">
