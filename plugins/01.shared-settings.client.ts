@@ -10,7 +10,8 @@ import {
   type SharedSettings,
 } from '../composables/useSharedSettings';
 
-export default defineNuxtPlugin(async () => {
+export default defineNuxtPlugin(async (nuxtApp) => {
+  const sharedTheme = useState<SharedSettings['dashboardTheme']>('sharedDashboardTheme', () => null);
   const ready = useState<boolean>('sharedSettingsReady', () => false);
   const error = useState<string | null>('sharedSettingsError', () => null);
   let applyingRemote = false;
@@ -30,7 +31,7 @@ export default defineNuxtPlugin(async () => {
 
   const backupLocalSettingsOnce = () => {
     if (localStorage.getItem(LOCAL_SETTINGS_BACKUP_KEY)) return;
-    const storageKeys: Record<keyof SharedSettings, string> = {
+    const storageKeys: Record<(typeof SHARED_SETTING_KEYS)[number], string> = {
       countdownDates: 'countdownDates',
       yearlyCountdownDates: 'yearlyCountdownDates',
       userChimeTimes: 'chimeTimes',
@@ -48,7 +49,8 @@ export default defineNuxtPlugin(async () => {
   const applyRemoteSettings = async (response: Awaited<ReturnType<typeof loadSharedSettings>>) => {
     applyingRemote = true;
     try {
-      applySharedSettingsToClient(response.settings, response.apply);
+      sharedTheme.value = response.settings.dashboardTheme ?? null;
+      nuxtApp.runWithContext(() => applySharedSettingsToClient(response.settings, response.apply));
       await nextTick();
     } finally {
       applyingRemote = false;
@@ -57,22 +59,26 @@ export default defineNuxtPlugin(async () => {
   };
 
   const applyRemoteBanners = async () => {
-    const banners = await loadSharedBanners();
-    bannerSource().value = banners.horizontal?.url ?? null;
-    verticalBannerSource().value = banners.vertical?.url ?? null;
+    const banners = await nuxtApp.runWithContext(loadSharedBanners);
+    nuxtApp.runWithContext(() => {
+      bannerSource().value = banners.horizontal?.url ?? null;
+      verticalBannerSource().value = banners.vertical?.url ?? null;
+    });
   };
 
   const applyRemoteChimes = async () => {
-    const chimes = await loadSharedChimes();
-    for (const kind of ['chime', 'pre-chime'] as const) {
-      const url = chimes[kind]?.url ?? null;
-      const sharedUrl = sharedChimeAudioUrl(kind);
-      if (sharedUrl.value === url) continue;
-      sharedUrl.value = url;
-      const source = kind === 'chime' ? chimeSource() : preChimeSource();
-      source.value = new Audio(url ?? `${useRuntimeConfig().app.baseURL}${kind === 'chime' ? 'chime.mp3' : 'pre-chime.mp3'}`);
-      source.value.load();
-    }
+    const chimes = await nuxtApp.runWithContext(loadSharedChimes);
+    nuxtApp.runWithContext(() => {
+      for (const kind of ['chime', 'pre-chime'] as const) {
+        const url = chimes[kind]?.url ?? null;
+        const sharedUrl = sharedChimeAudioUrl(kind);
+        if (sharedUrl.value === url) continue;
+        sharedUrl.value = url;
+        const source = kind === 'chime' ? chimeSource() : preChimeSource();
+        source.value = new Audio(url ?? `${useRuntimeConfig().app.baseURL}${kind === 'chime' ? 'chime.mp3' : 'pre-chime.mp3'}`);
+        source.value.load();
+      }
+    });
   };
 
   try {
@@ -95,10 +101,10 @@ export default defineNuxtPlugin(async () => {
     let saveTimer: ReturnType<typeof setTimeout> | undefined;
     let saveQueue = Promise.resolve();
     const save = () => {
-      const snapshot = saveCurrentSettings();
+      const snapshot = nuxtApp.runWithContext(saveCurrentSettings);
       saveQueue = saveQueue
         .catch(() => undefined)
-        .then(() => saveSharedSettings(snapshot))
+        .then(() => nuxtApp.runWithContext(() => saveSharedSettings(snapshot)))
         .catch((cause: unknown) => {
           console.error('共有設定の保存に失敗しました:', cause);
           error.value = '共有設定を保存できませんでした。';
@@ -121,42 +127,42 @@ export default defineNuxtPlugin(async () => {
         saveTimer = setTimeout(save, 500);
       }, { deep: true });
     });
-
-    // Pick up updates made on /admin and apply enabled fields on every device.
-    // Refresh immediately when an already-open dashboard becomes active again,
-    // rather than making it wait for the next timer tick.
-    let polling = false;
-    const refreshSharedSettings = async () => {
-      if (polling) return;
-      polling = true;
-      try {
-        const settings = await loadSharedSettings();
-        await applyRemoteSettings(settings);
-      } catch (cause) {
-        console.warn('共有設定の再読み込みに失敗しました:', cause);
-      } finally {
-        polling = false;
-      }
-      try {
-        await applyRemoteBanners();
-      } catch (cause) {
-        console.warn('共有バナーの再読み込みに失敗しました:', cause);
-      }
-      try {
-        await applyRemoteChimes();
-      } catch (cause) {
-        console.warn('共有チャイム音声の再読み込みに失敗しました:', cause);
-      }
-    };
-    const refreshWhenVisible = () => {
-      if (document.visibilityState === 'visible') void refreshSharedSettings();
-    };
-    window.setInterval(() => void refreshSharedSettings(), 15_000);
-    window.addEventListener('focus', refreshWhenVisible);
-    document.addEventListener('visibilitychange', refreshWhenVisible);
   } catch (cause) {
     console.error('共有設定の初期化に失敗しました:', cause);
     error.value = '共有設定を読み込めませんでした。';
     ready.value = true;
   }
+
+  // Pick up updates made on /admin and apply enabled fields on every device.
+  // Refresh immediately when an already-open dashboard becomes active again,
+  // rather than making it wait for the next timer tick.
+  let polling = false;
+  const refreshSharedSettings = async () => {
+    if (polling) return;
+    polling = true;
+    try {
+      const settings = await nuxtApp.runWithContext(loadSharedSettings);
+      await applyRemoteSettings(settings);
+    } catch (cause) {
+      console.warn('共有設定の再読み込みに失敗しました:', cause);
+    } finally {
+      polling = false;
+    }
+    try {
+      await applyRemoteBanners();
+    } catch (cause) {
+      console.warn('共有バナーの再読み込みに失敗しました:', cause);
+    }
+    try {
+      await applyRemoteChimes();
+    } catch (cause) {
+      console.warn('共有チャイム音声の再読み込みに失敗しました:', cause);
+    }
+  };
+  const refreshWhenVisible = () => {
+    if (document.visibilityState === 'visible') void refreshSharedSettings();
+  };
+  window.setInterval(() => void refreshSharedSettings(), 15_000);
+  window.addEventListener('focus', refreshWhenVisible);
+  document.addEventListener('visibilitychange', refreshWhenVisible);
 });

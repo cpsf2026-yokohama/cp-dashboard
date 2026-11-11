@@ -2,7 +2,7 @@
 import { createBlueFlameRenderer } from '~/utils/visuals/blue-flame-shader';
 
 const canvas = ref<HTMLCanvasElement | null>(null);
-const props = withDefaults(defineProps<{ active?: boolean }>(), { active: true });
+const props = withDefaults(defineProps<{ active?: boolean; embedded?: boolean }>(), { active: true });
 
 // Nuxt's client-only wrapper can mount before its canvas template ref is ready.
 watch(canvas, (element, _previous, onCleanup) => {
@@ -98,7 +98,7 @@ watch(canvas, (element, _previous, onCleanup) => {
 </script>
 
 <template>
-  <div class="blue-flame-background" aria-hidden="true">
+  <div class="blue-flame-background" :class="{ embedded }" aria-hidden="true">
     <canvas ref="canvas" />
   </div>
 </template>
@@ -112,6 +112,11 @@ watch(canvas, (element, _previous, onCleanup) => {
   pointer-events: none;
   overflow: hidden;
   background: radial-gradient(ellipse at 50% 120%, #12374980, transparent 65%);
+}
+
+.blue-flame-background.embedded {
+  position: absolute;
+  height: 30%;
 }
 
 canvas {

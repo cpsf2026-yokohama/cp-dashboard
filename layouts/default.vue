@@ -1,6 +1,6 @@
 <template>
-  <div class="min-h-[100dvh] dashboard-layout" :class="{ 'blue-flame-layout': colorMode.value === 'blue-flame' }" :style="{ 'font-family': fontFamily }">
-    <LazyBlueFlameBackground v-if="colorMode.value === 'blue-flame'" :active="backgroundActive" />
+  <div class="min-h-[100dvh] dashboard-layout" :data-theme="sharedTheme ?? undefined" :class="{ 'blue-flame-layout': effectiveTheme === 'blue-flame' }" :style="{ 'font-family': fontFamily }">
+    <LazyBlueFlameBackground v-if="effectiveTheme === 'blue-flame'" :active="backgroundActive" />
     <div class="dashboard-content">
       <slot></slot>
     </div>
@@ -13,6 +13,8 @@
 import { useIntervalFn, type Pausable } from '@vueuse/core'
 
 const colorMode = useColorMode();
+const sharedTheme = useState<string | null>('sharedDashboardTheme', () => null);
+const effectiveTheme = computed(() => sharedTheme.value ?? colorMode.value);
 withDefaults(defineProps<{ backgroundActive?: boolean }>(), { backgroundActive: true });
 
 // 選択されているエフェクト
