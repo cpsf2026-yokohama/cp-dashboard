@@ -1,45 +1,4 @@
 /**
- * DaisyUIのテーマ
- */
-export const themes = [
-  'dash',
-  'blue-flame',
-  'system',
-  'light',
-  'dark',
-  'cupcake',
-  'bumblebee',
-  'emerald',
-  'corporate',
-  'synthwave',
-  'retro',
-  'cyberpunk',
-  'valentine',
-  'halloween',
-  'garden',
-  'forest',
-  'aqua',
-  'lofi',
-  'pastel',
-  'fantasy',
-  'wireframe',
-  'black',
-  'luxury',
-  'dracula',
-  'cmyk',
-  'autumn',
-  'business',
-  'acid',
-  'lemonade',
-  'night',
-  'coffee',
-  'winter',
-  'dim',
-  'nord',
-  'sunset',
-];
-
-/**
  * チャイムを鳴らす時間
  */
 export const kChimeTimes: ChimeTime[] = [

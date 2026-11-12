@@ -1,3 +1,5 @@
+import { isDashboardTheme, type DashboardTheme } from '../utils/dashboard-themes';
+
 
 export interface SharedSettings {
   countdownDates: CountdownData[];
@@ -7,6 +9,7 @@ export interface SharedSettings {
   isPreChimeEnabled: boolean;
   isBannerVisible: boolean;
   isVerticalBanner: boolean;
+  dashboardTheme?: DashboardTheme | null;
 }
 
 export const SHARED_SETTING_KEYS = [
@@ -19,7 +22,7 @@ export const SHARED_SETTING_KEYS = [
   'isVerticalBanner',
 ] as const satisfies readonly (keyof SharedSettings)[];
 
-export type SharedSettingsPolicy = Record<keyof SharedSettings, boolean>;
+export type SharedSettingsPolicy = Record<(typeof SHARED_SETTING_KEYS)[number], boolean>;
 
 export interface SharedSettingsResponse {
   settings: SharedSettings;
@@ -341,7 +344,7 @@ export async function loadSharedSettings(): Promise<SharedSettingsResponse> {
     : DEFAULT_SHARED_SETTINGS_POLICY;
 
   return {
-    settings,
+    settings: { ...settings, dashboardTheme: isDashboardTheme(settings.dashboardTheme) ? settings.dashboardTheme : null },
     apply,
     updatedAt: 'updatedAt' in result && typeof result.updatedAt === 'string'
       ? result.updatedAt

@@ -18,6 +18,7 @@ import {
   type SharedSettings,
   type SharedSettingsPolicy,
 } from '../composables/useSharedSettings'
+import { dashboardThemes, type DashboardTheme } from '../utils/dashboard-themes'
 import AdminDashboardPreview from '../components/admin/dashboard-preview.vue'
 
 type Video = {
@@ -84,6 +85,8 @@ const settingsPolicyLoading = ref(false)
 const settingsPolicySaving = ref(false)
 const sharedSettings = ref<SharedSettings | null>(null)
 const settingsValuesSaving = ref(false)
+const savedDashboardTheme = ref<DashboardTheme | null>(null)
+const themeSaving = ref(false)
 const bannerInfo = ref<Record<SharedBannerKind, SharedBannerInfo | null>>({ horizontal: null, vertical: null })
 const chimeInfo = ref<Record<SharedChimeKind, SharedChimeInfo | null>>({ chime: null, 'pre-chime': null })
 const chimeInfoLoadError = ref(false)
@@ -295,6 +298,7 @@ async function loadSettingsPolicy() {
     const data = await loadSharedSettings()
     settingsPolicy.value = { ...data.apply }
     sharedSettings.value = structuredClone(data.settings)
+    savedDashboardTheme.value = data.settings.dashboardTheme ?? null
     bannerInfo.value = await loadSharedBanners()
   } catch (error) {
     console.error('Failed to load shared settings policy:', error)
@@ -403,7 +407,7 @@ async function saveSettingsValues() {
     const response = await fetch(`${API_BASE}/settings`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ settings: sharedSettings.value, adminEdit: true }),
+      body: JSON.stringify({ settings: Object.fromEntries(SHARED_SETTING_KEYS.map(key => [key, sharedSettings.value![key]])), adminEdit: true }),
     })
     if (!response.ok) throw await apiResponseError(response)
     showNotice('共有設定の変更を申請しました。メンターの承認後に端末へ反映されます。')
@@ -412,6 +416,26 @@ async function saveSettingsValues() {
     showNotice(`設定値を保存できませんでした：${error instanceof Error ? error.message : '不明なエラー'}`, true)
   } finally {
     settingsValuesSaving.value = false
+  }
+}
+
+async function submitDashboardTheme() {
+  const theme = sharedSettings.value?.dashboardTheme ?? null
+  if (themeSaving.value || theme === savedDashboardTheme.value) return
+  if (!confirmRequestSubmission('全端末テーマの変更申請')) return
+  themeSaving.value = true
+  try {
+    const response = await fetch(`${API_BASE}/settings`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ settings: { dashboardTheme: theme }, adminEdit: true }),
+    })
+    if (!response.ok) throw await apiResponseError(response)
+    showNotice('テーマの変更を申請しました。メンターの承認後に端末へ反映されます。')
+  } catch (error) {
+    showNotice(`テーマを申請できませんでした：${error instanceof Error ? error.message : '不明なエラー'}`, true)
+  } finally {
+    themeSaving.value = false
   }
 }
 
@@ -998,6 +1022,19 @@ function openSchedule() {
           </div>
           <p v-if="settingsPolicyLoading" class="state-message muted" role="status">共有設定を読み込み中...</p>
           <template v-else-if="sharedSettings">
+            <div class="settings-value-grid">
+              <div class="field">
+                <label for="dashboard-theme">全端末のテーマ</label>
+                <select id="dashboard-theme" v-model="sharedSettings.dashboardTheme" class="input" :disabled="themeSaving">
+                  <option :value="null">各端末の設定に任せる</option>
+                  <option v-for="theme in dashboardThemes" :key="theme" :value="theme">{{ theme }}</option>
+                </select>
+              </div>
+              <button class="button button-primary" :disabled="themeSaving || sharedSettings.dashboardTheme === savedDashboardTheme" @click="void submitDashboardTheme()">
+                {{ themeSaving ? '申請中...' : 'テーマの変更を申請' }}
+              </button>
+            </div>
+            <p class="help">メンターの承認後、各端末のダッシュボードに反映されます。</p>
             <div class="admin-preview-toolbar">
               <div class="admin-preview-copy"><h3>画面プレビュー</h3><p class="help">保存前の変更も反映して、ダッシュボードでの見え方を確認できます。</p></div>
               <button

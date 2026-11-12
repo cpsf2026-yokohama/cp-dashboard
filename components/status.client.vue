@@ -80,13 +80,6 @@ watch(fontSizeOffset, (newVal) => {
       </div>
     </div>
 
-
-    <div v-if="!sensorVisible" class="stat px-5">
-      <div class="max-2xl:hidden">
-        <GeneralSetting></GeneralSetting>
-      </div>
-    </div>
-
     <div class="stat m-auto gap-2">
       <span>*出典: 気象庁ホームページ</span>
 

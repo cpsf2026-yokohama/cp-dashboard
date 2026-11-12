@@ -1,13 +1,19 @@
 <script setup lang="ts">
-import { drawBlueFlame } from '~/utils/visuals/blue-flame';
+import { createBlueFlameRenderer } from '~/utils/visuals/blue-flame-shader';
 
 const canvas = ref<HTMLCanvasElement | null>(null);
-const props = withDefaults(defineProps<{ active?: boolean }>(), { active: true });
+const props = withDefaults(defineProps<{ active?: boolean; embedded?: boolean }>(), { active: true });
 
 // Nuxt's client-only wrapper can mount before its canvas template ref is ready.
 watch(canvas, (element, _previous, onCleanup) => {
-  const ctx = element?.getContext('2d');
-  if (!element || !ctx) return;
+  if (!element) return;
+  let renderer: ReturnType<typeof createBlueFlameRenderer>;
+  try {
+    renderer = createBlueFlameRenderer(element);
+  } catch {
+    return; // The CSS background stays visible without WebGL.
+  }
+  let lost = false;
 
   const motion = window.matchMedia('(prefers-reduced-motion: reduce)');
   let frame = 0;
@@ -15,26 +21,31 @@ watch(canvas, (element, _previous, onCleanup) => {
   let width = 0;
   let height = 0;
   let lastFrame = 0;
-  let elapsed = 0;
+  let elapsed = 4;
+  let lastTick = 0;
 
-  const draw = () => drawBlueFlame(ctx, width, height, elapsed);
+  const draw = () => {
+    if (!lost && width && height) renderer.draw(elapsed);
+  };
   const stop = () => {
     cancelAnimationFrame(frame);
     frame = 0;
     lastFrame = 0;
+    lastTick = 0;
   };
   const tick = (now: number) => {
-    if (now - lastFrame >= 1000 / 30) {
-      // Resume without a jump after a hidden tab or a scheduled video.
-      if (lastFrame) elapsed += Math.min((now - lastFrame) / 1000, 0.1);
-      lastFrame = now;
+    if (lastTick) elapsed += Math.min((now - lastTick) / 1000, 0.1) * .65;
+    lastTick = now;
+    const interval = 1000 / 30;
+    if (!lastFrame || now - lastFrame >= interval - .5) {
+      lastFrame = lastFrame ? now - Math.max(0, now - lastFrame - interval) % interval : now;
       draw();
     }
     frame = requestAnimationFrame(tick);
   };
   const sync = () => {
     stop();
-    if (!props.active || !visible || document.hidden) return;
+    if (!props.active || !visible || document.hidden || lost) return;
     draw();
     if (!motion.matches) frame = requestAnimationFrame(tick);
   };
@@ -43,12 +54,23 @@ watch(canvas, (element, _previous, onCleanup) => {
     width = rect.width;
     height = rect.height;
     if (!width || !height) return;
-    const scale = Math.min(window.devicePixelRatio || 1, 1.5, 1920 / width);
-    element.width = Math.round(width * scale);
-    element.height = Math.round(height * scale);
-    ctx.setTransform(scale, 0, 0, scale, 0, 0);
+    if (!lost) renderer.resize(width, height);
     draw();
   };
+  const contextLost = (event: Event) => {
+    event.preventDefault();
+    lost = true;
+    element.style.visibility = 'hidden';
+    stop();
+  };
+  const contextRestored = () => {
+    lost = false;
+    element.style.visibility = '';
+    resize();
+    sync();
+  };
+  element.addEventListener('webglcontextlost', contextLost);
+  element.addEventListener('webglcontextrestored', contextRestored);
   const observer = new ResizeObserver(resize);
   const intersection = new IntersectionObserver(([entry]) => {
     visible = entry?.isIntersecting ?? false;
@@ -68,12 +90,15 @@ watch(canvas, (element, _previous, onCleanup) => {
     intersection.disconnect();
     document.removeEventListener('visibilitychange', sync);
     motion.removeEventListener('change', sync);
+    element.removeEventListener('webglcontextlost', contextLost);
+    element.removeEventListener('webglcontextrestored', contextRestored);
+    renderer.dispose();
   });
 }, { flush: 'post' });
 </script>
 
 <template>
-  <div class="blue-flame-background" aria-hidden="true">
+  <div class="blue-flame-background" :class="{ embedded }" aria-hidden="true">
     <canvas ref="canvas" />
   </div>
 </template>
@@ -82,16 +107,26 @@ watch(canvas, (element, _previous, onCleanup) => {
 .blue-flame-background {
   position: fixed;
   inset: auto 0 0;
-  height: 32dvh;
+  height: min(30dvh, 320px);
   z-index: 0;
   pointer-events: none;
   overflow: hidden;
   background: radial-gradient(ellipse at 50% 120%, #12374980, transparent 65%);
 }
 
+.blue-flame-background.embedded {
+  position: absolute;
+  height: 30%;
+}
+
 canvas {
   display: block;
   width: 100%;
   height: 100%;
+  mask-image: linear-gradient(to top, #000 78%, transparent);
+}
+
+@media (max-width: 640px) {
+  .blue-flame-background { height: 23dvh; }
 }
 </style>

@@ -1,6 +1,9 @@
 <script setup lang="ts">
+import { themes } from '~/utils/dashboard-themes';
+
 // テーマ設定
 const colorMode = useColorMode();
+const sharedTheme = useState<string | null>('sharedDashboardTheme', () => null);
 
 // 時刻表示設定
 const simpleTimeState = clockEffect();
@@ -21,7 +24,8 @@ const infoScrollTextSt = infoScrollText();
 <template>
   <label class="label">
     <span class="label-text">テーマ</span>
-    <select class="select select-bordered w-44" v-model="colorMode.preference">
+    <span v-if="sharedTheme" class="label-text">{{ sharedTheme }}（全端末共通）</span>
+    <select v-else class="select select-bordered w-44" v-model="colorMode.preference">
       <option disabled selected>テーマを選択...</option>
       <option v-for="theme of themes" :key="theme">{{ theme }}</option>
     </select>

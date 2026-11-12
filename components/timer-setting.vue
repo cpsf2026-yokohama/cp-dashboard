@@ -18,7 +18,7 @@ const timerSettingState = timerSetting();
 </script>
 
 <template>
-  <div class="min-w-full flex flex-row flex-wrap justify-center items-center gap-2">
+  <div class="dashboard-timer min-w-full flex flex-row flex-wrap justify-center items-center gap-2">
     <div class="2xl:min-w-full flex flex-col gap-1">
       <label class="label cursor-pointer gap-4">
         <span class="label-text">チャイム</span>

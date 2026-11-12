@@ -1,6 +1,6 @@
 <template>
-  <div class="min-h-[100dvh] dashboard-layout" :class="{ 'blue-flame-layout': colorMode.value === 'blue-flame' }" :style="{ 'font-family': fontFamily }">
-    <BlueFlameBackground v-if="colorMode.value === 'blue-flame'" :active="backgroundActive" />
+  <div class="min-h-[100dvh] dashboard-layout" :data-theme="sharedTheme ?? undefined" :class="{ 'blue-flame-layout': effectiveTheme === 'blue-flame' }" :style="{ 'font-family': fontFamily }">
+    <LazyBlueFlameBackground v-if="effectiveTheme === 'blue-flame'" :active="backgroundActive" />
     <div class="dashboard-content">
       <slot></slot>
     </div>
@@ -13,6 +13,8 @@
 import { useIntervalFn, type Pausable } from '@vueuse/core'
 
 const colorMode = useColorMode();
+const sharedTheme = useState<string | null>('sharedDashboardTheme', () => null);
+const effectiveTheme = computed(() => sharedTheme.value ?? colorMode.value);
 withDefaults(defineProps<{ backgroundActive?: boolean }>(), { backgroundActive: true });
 
 // 選択されているエフェクト
@@ -99,6 +101,16 @@ const setFont = async (font: string) => {
 
 .blue-flame-layout .stat-title {
   color: #b9c6d9;
+}
+
+.blue-flame-layout .dashboard-timer .btn-outline:not(:hover) {
+  color: #a9dfff;
+  background: #101b2b;
+  border-color: #5385ad;
+}
+
+.blue-flame-layout .dashboard-credit {
+  text-shadow: 0 1px 4px #000, 0 0 8px #000;
 }
 
 body {

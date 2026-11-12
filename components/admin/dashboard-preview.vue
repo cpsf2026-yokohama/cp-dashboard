@@ -73,7 +73,8 @@ const activeVerticalBanner = computed(() => props.pendingVerticalBannerUrl || pr
       <span class="preview-silent">音声なし</span>
     </div>
 
-    <div class="preview-screen">
+    <div class="preview-screen" :data-theme="settings.dashboardTheme ?? undefined">
+      <LazyBlueFlameBackground v-if="settings.dashboardTheme === 'blue-flame'" embedded />
       <div v-if="settings.isBannerVisible && activeHorizontalBanner" class="preview-horizontal-banner">
         <img :src="activeHorizontalBanner" alt="横型バナーのプレビュー">
       </div>
@@ -157,6 +158,19 @@ const activeVerticalBanner = computed(() => props.pendingVerticalBannerUrl || pr
   overflow: hidden;
   background: #f8fafc;
   color: #172033;
+}
+
+.preview-screen[data-theme] {
+  background: var(--fallback-b1, oklch(var(--b1)));
+  color: var(--fallback-bc, oklch(var(--bc)));
+}
+
+.preview-screen[data-theme="blue-flame"] > :not(.blue-flame-background) {
+  z-index: 1;
+}
+
+.preview-screen[data-theme="blue-flame"] :is(.preview-date, .preview-weather, .preview-status p, .preview-status span, .preview-countdown > p, .preview-countdown-label) {
+  color: #b9c6d9;
 }
 
 .preview-status,

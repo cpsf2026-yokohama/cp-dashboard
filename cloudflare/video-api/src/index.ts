@@ -1,3 +1,5 @@
+import { isDashboardTheme } from "../../../utils/dashboard-themes";
+
 interface Env {
 
   DB: D1Database;
@@ -100,6 +102,8 @@ const sharedSettingKeys = [
   "isVerticalBanner",
 ] as const;
 
+const sharedValueKeys = [...sharedSettingKeys, "dashboardTheme"] as const;
+
 type SharedSettingsApply = Record<(typeof sharedSettingKeys)[number], boolean>;
 
 const defaultSharedSettingsApply: SharedSettingsApply = {
@@ -127,7 +131,8 @@ function parseSharedSettingsApply(value: unknown): SharedSettingsApply | null {
 function isSharedSettingsPatch(value: unknown): value is Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
   const record = value as Record<string, unknown>;
-  if (Object.keys(record).some((key) => !sharedSettingKeys.includes(key as (typeof sharedSettingKeys)[number]))) return false;
+  if (Object.keys(record).some((key) => !sharedValueKeys.includes(key as (typeof sharedValueKeys)[number]))) return false;
+  if ("dashboardTheme" in record && record.dashboardTheme !== null && !isDashboardTheme(record.dashboardTheme)) return false;
   for (const key of sharedSettingKeys) {
     if (!(key in record)) continue;
     if (key === "isChimeEnabled" || key === "isPreChimeEnabled" || key === "isBannerVisible" || key === "isVerticalBanner") {
@@ -608,6 +613,7 @@ async function applyChangeRequest(env: Env, reviewer: string, row: { id: string;
       let currentApply = defaultSharedSettingsApply;
       try { currentApply = parseSharedSettingsApply(JSON.parse(current.applyJson)) ?? defaultSharedSettingsApply; } catch { /* use defaults */ }
       const effectiveApply = apply ?? currentApply;
+      if ("dashboardTheme" in incoming) settings.dashboardTheme = incoming.dashboardTheme;
       for (const key of sharedSettingKeys) if ((payload.adminEdit === true || effectiveApply[key]) && key in incoming) settings[key] = incoming[key];
       await env.DB.prepare("UPDATE shared_settings SET settings_json = ?, apply_json = ?, updated_at = datetime('now') WHERE id = 1")
         .bind(JSON.stringify(settings), JSON.stringify(apply ?? parseSharedSettingsApply(JSON.parse(current.applyJson)) ?? defaultSharedSettingsApply)).run();
@@ -772,8 +778,8 @@ export default {
       const currentSettings = settingsRow ? JSON.parse(settingsRow.settingsJson) as Record<string, unknown> : {};
       let currentApply = defaultSharedSettingsApply;
       try { if (settingsRow) currentApply = parseSharedSettingsApply(JSON.parse(settingsRow.applyJson)) ?? defaultSharedSettingsApply; } catch { /* use defaults */ }
-      const labels: Record<string, string> = { countdownDates: "カウントダウン予定", yearlyCountdownDates: "毎年の予定", userChimeTimes: "チャイム時刻", isChimeEnabled: "チャイム", isPreChimeEnabled: "予鈴", isBannerVisible: "横バナー", isVerticalBanner: "縦バナー" };
-      const valueText = (value: unknown) => typeof value === "boolean" ? (value ? "有効" : "無効") : Array.isArray(value) ? `${value.length}件` : value === undefined ? "未設定" : "変更あり";
+      const labels: Record<string, string> = { countdownDates: "カウントダウン予定", yearlyCountdownDates: "毎年の予定", userChimeTimes: "チャイム時刻", isChimeEnabled: "チャイム", isPreChimeEnabled: "予鈴", isBannerVisible: "横バナー", isVerticalBanner: "縦バナー", dashboardTheme: "全端末のテーマ" };
+      const valueText = (value: unknown) => typeof value === "boolean" ? (value ? "有効" : "無効") : Array.isArray(value) ? `${value.length}件` : typeof value === "string" ? value : value == null ? "各端末の設定" : "変更あり";
       response = Response.json({ requests: result.results.map((row) => {
         const payload = JSON.parse(String(row.payloadJson)) as Record<string, unknown>;
         let summary = String(row.summary);
@@ -784,7 +790,7 @@ export default {
             : currentSettings) as Record<string, unknown>;
           const changes: Record<string, { before: unknown; after: unknown; beforeKnown?: boolean }> = {};
           const applyChanges: Record<string, { before: boolean; after: boolean }> = {};
-          for (const key of sharedSettingKeys) {
+          for (const key of sharedValueKeys) {
             if (key in requested && JSON.stringify(baseline[key]) !== JSON.stringify(requested[key])) changes[key] = { before: baseline[key], after: requested[key] };
           }
           const requestedApply = (payload.apply as SharedSettingsApply | undefined) ?? currentApply;
@@ -792,7 +798,7 @@ export default {
           // Older pending requests have no historical baseline. Preserve the requested
           // targets in the UI instead of claiming that no change was requested.
           if (!payload.beforeSettings && Object.keys(changes).length === 0 && Object.keys(requested).length > 0) {
-            for (const key of sharedSettingKeys) if (key in requested) changes[key] = { before: undefined, after: requested[key], beforeKnown: false };
+            for (const key of sharedValueKeys) if (key in requested) changes[key] = { before: undefined, after: requested[key], beforeKnown: false };
           }
           payload.changes = changes;
           payload.applyChanges = applyChanges;
@@ -1010,7 +1016,7 @@ export default {
           kind = "settings";
           const labels: Record<string, string> = {
             countdownDates: "カウントダウン予定", yearlyCountdownDates: "毎年の予定", userChimeTimes: "チャイム時刻",
-            isChimeEnabled: "チャイム", isPreChimeEnabled: "予鈴", isBannerVisible: "横バナー", isVerticalBanner: "縦バナー",
+            isChimeEnabled: "チャイム", isPreChimeEnabled: "予鈴", isBannerVisible: "横バナー", isVerticalBanner: "縦バナー", dashboardTheme: "全端末のテーマ",
           };
           const settings = (body.settings ?? {}) as Record<string, unknown>;
           const stored = await env.DB.prepare("SELECT settings_json AS settingsJson, apply_json AS applyJson FROM shared_settings WHERE id = 1")
@@ -1022,14 +1028,17 @@ export default {
           const afterApply = (body.apply as SharedSettingsApply | undefined) ?? beforeApply;
           const changes: Record<string, { before: unknown; after: unknown }> = {};
           const applyChanges: Record<string, { before: boolean; after: boolean }> = {};
+          for (const key of sharedValueKeys) {
+            const before = key === "dashboardTheme" ? beforeSettings[key] ?? null : beforeSettings[key];
+            if (key in settings && JSON.stringify(before) !== JSON.stringify(settings[key])) changes[key] = { before, after: settings[key] };
+          }
           for (const key of sharedSettingKeys) {
-            if (key in settings && JSON.stringify(beforeSettings[key]) !== JSON.stringify(settings[key])) changes[key] = { before: beforeSettings[key], after: settings[key] };
             if (afterApply[key] !== beforeApply[key]) applyChanges[key] = { before: beforeApply[key], after: afterApply[key] };
           }
           const describeValue = (key: string, value: unknown) => {
             if (typeof value === "boolean") return value ? "有効" : "無効";
             if (Array.isArray(value)) return `${value.length}件`;
-            return value === undefined ? "未設定" : "変更あり";
+            return typeof value === "string" ? value : value == null ? "各端末の設定" : "変更あり";
           };
           const descriptions = Object.entries(changes).map(([key, change]) => `${labels[key] ?? key}: ${describeValue(key, change.before)} → ${describeValue(key, change.after)}`);
           for (const [key, change] of Object.entries(applyChanges)) descriptions.push(`${labels[key]}のサイト反映: ${change.before ? "有効" : "無効"} → ${change.after ? "有効" : "無効"}`);
