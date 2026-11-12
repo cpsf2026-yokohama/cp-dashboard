@@ -18,7 +18,7 @@ import {
   type SharedSettings,
   type SharedSettingsPolicy,
 } from '../composables/useSharedSettings'
-import { dashboardThemes, type DashboardTheme } from '../utils/dashboard-themes'
+import { dashboardThemes, type DashboardTheme } from '../shared/dashboard-themes'
 import AdminDashboardPreview from '../components/admin/dashboard-preview.vue'
 
 type Video = {
