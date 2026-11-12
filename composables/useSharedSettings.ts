@@ -1,4 +1,4 @@
-import { isDashboardTheme, type DashboardTheme } from '../utils/dashboard-themes';
+import { isDashboardTheme, type DashboardTheme } from '../shared/dashboard-themes';
 
 
 export interface SharedSettings {

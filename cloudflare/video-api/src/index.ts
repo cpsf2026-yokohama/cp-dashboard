@@ -1,4 +1,4 @@
-import { isDashboardTheme } from "../../../utils/dashboard-themes";
+import { isDashboardTheme } from "../../../shared/dashboard-themes";
 
 interface Env {
 

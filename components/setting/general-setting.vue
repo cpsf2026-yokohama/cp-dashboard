@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { themes } from '~/utils/dashboard-themes';
+import { themes } from '~/shared/dashboard-themes';
 
 // テーマ設定
 const colorMode = useColorMode();
