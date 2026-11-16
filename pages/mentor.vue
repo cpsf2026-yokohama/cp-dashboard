@@ -155,7 +155,7 @@ function scheduleDiffs(item: ChangeRequest): ScheduleDiff[] {
 function details(item: ChangeRequest) {
   const payload = item.payload
   const rows: Array<[string, string]> = []
-  const labels: Record<string, string> = { isBannerVisible: '横バナー', isVerticalBanner: '縦バナー', isChimeEnabled: 'チャイム', isPreChimeEnabled: '予鈴', countdownDates: 'カウントダウン予定', yearlyCountdownDates: '毎年の予定', userChimeTimes: 'チャイム時刻', dashboardTheme: '全端末のテーマ' }
+  const labels: Record<string, string> = { isBannerVisible: '横バナー', isVerticalBanner: '縦バナー', isChimeEnabled: 'チャイム', isPreChimeEnabled: '予鈴', countdownDates: 'カウントダウン予定', yearlyCountdownDates: '毎年の予定', countdownTimeDisplayDays: '残り時間の表示開始', userChimeTimes: 'チャイム時刻', dashboardTheme: '全端末のテーマ' }
   const valueText = (value: unknown) => {
     if (typeof value === 'boolean') return value ? '有効' : '無効'
     if (Array.isArray(value)) {

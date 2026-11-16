@@ -57,9 +57,9 @@ const countdownIsUrgent = computed(() => nextEvent.value !== null
   && calcLimitDays(nextEvent.value.eventDate, now.value) <= 4)
 const countdownRemainingTime = computed(() => {
   const remainingDays = nextEvent.value ? calcLimitDays(nextEvent.value.eventDate, now.value) : null
-  if (!nextEvent.value || remainingDays === null || remainingDays > 4 || remainingDays < 1) return null
-  const seconds = Math.floor(Math.max(0, nextEvent.value.eventDate.diff(now.value)) / 1000)
-  return `${Math.floor(seconds / 3600).toString().padStart(2, '0')}:${Math.floor(seconds % 3600 / 60).toString().padStart(2, '0')}:${(seconds % 60).toString().padStart(2, '0')}`
+  if (!nextEvent.value || remainingDays === null || remainingDays > props.settings.countdownTimeDisplayDays || remainingDays < 1) return null
+  const totalHours = Math.floor(Math.max(0, nextEvent.value.eventDate.diff(now.value)) / (60 * 60 * 1000))
+  return `${Math.floor(totalHours / 24)}日と${totalHours % 24}時間`
 })
 
 const activeHorizontalBanner = computed(() => props.pendingHorizontalBannerUrl || props.horizontalBannerUrl)

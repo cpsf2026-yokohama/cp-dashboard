@@ -22,6 +22,7 @@ export default defineNuxtPlugin(async (nuxtApp) => {
   const saveCurrentSettings = () => ({
     countdownDates: countdownDates().value,
     yearlyCountdownDates: yearlyCountdownDates().value,
+    countdownTimeDisplayDays: countdownTimeDisplayDays().value,
     userChimeTimes: userChimeTimes().value,
     isChimeEnabled: isChimeEnabled().value,
     isPreChimeEnabled: isPreChimeEnabled().value,
@@ -34,6 +35,7 @@ export default defineNuxtPlugin(async (nuxtApp) => {
     const storageKeys: Record<(typeof SHARED_SETTING_KEYS)[number], string> = {
       countdownDates: 'countdownDates',
       yearlyCountdownDates: 'yearlyCountdownDates',
+      countdownTimeDisplayDays: 'countdownTimeDisplayDays',
       userChimeTimes: 'chimeTimes',
       isChimeEnabled: 'isChimeEnabled',
       isPreChimeEnabled: 'isPreChimeEnabled',
@@ -114,6 +116,7 @@ export default defineNuxtPlugin(async (nuxtApp) => {
     const sources = [
       countdownDates(),
       yearlyCountdownDates(),
+      countdownTimeDisplayDays(),
       userChimeTimes(),
       isChimeEnabled(),
       isPreChimeEnabled(),

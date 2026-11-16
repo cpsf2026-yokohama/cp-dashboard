@@ -20,6 +20,7 @@ const countdownLimit = useState('countdownLimit', () => 0);
 const countdownLimitDays = useState('countdownLimitDays', () => 0);
 // 赤くするかどうか
 const needCountdownAlert = useState('needCountdownAlert', () => false);
+const countdownTimeDisplayDaysState = countdownTimeDisplayDays();
 
 // 消費した日数の割合
 const countdownRatio = useState('countdownRatio', () => 0);
@@ -109,12 +110,10 @@ const verticalBanner = verticalBannerSource();
         <strong>本日開催！</strong>
         <span aria-hidden="true">✦</span>
       </div>
-      <div v-if="needCountdownAlert && dayjs.duration(countdownLimit).asHours() >= 24" class="mt-3 flex flex-col items-center">
+      <div v-if="countdownLimitDays >= 1 && countdownLimitDays <= countdownTimeDisplayDaysState" class="mt-3 flex flex-col items-center">
         <span class="text-[1.6vw]">残り時間</span>
-        <div class="countdown text-[2.5vw] font-bold text-red-600">
-          <span :style="{ '--value': Math.floor(dayjs.duration(countdownLimit).asHours()) }"></span>:
-          <span :style="{ '--value': dayjs.duration(countdownLimit).minutes() }"></span>:
-          <span :style="{ '--value': dayjs.duration(countdownLimit).seconds() }"></span>
+        <div class="text-[2.5vw] font-bold text-red-600">
+          {{ Math.floor(countdownLimitDays) }}日と{{ Math.floor(dayjs.duration(countdownLimit).asHours()) % 24 }}時間
         </div>
       </div>
     </div>

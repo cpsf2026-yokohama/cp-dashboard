@@ -8,6 +8,7 @@ const selectedDate: Ref<Date | null> = ref(new Date());
 const countdownDatesState = countdownDates();
 // 年間定期のカウントダウンの日付
 const yearlyCountdownDatesState = yearlyCountdownDates();
+const countdownTimeDisplayDaysState = countdownTimeDisplayDays();
 // カレンダーに表示する属性
 const attr = ref<any[]>([]);
 
@@ -171,6 +172,13 @@ const onResetButton = () => {
   </form>
 
   <h3 class="font-bold text-lg">カウントダウン設定</h3>
+  <label class="form-control py-2">
+    <span class="label-text">残り時間を表示し始めるタイミング</span>
+    <select v-model.number="countdownTimeDisplayDaysState" class="select select-bordered">
+      <option v-for="days in 30" :key="days" :value="days">イベントの{{ days }}日前から</option>
+    </select>
+    <span class="label-text-alt">設定した日数以内になると「○日と○時間」と表示します。</span>
+  </label>
   <p class="py-2">
     <VDatePicker v-model="selectedDate" expanded title-position="left" :attributes="attr" color="orange">
       <template #footer>

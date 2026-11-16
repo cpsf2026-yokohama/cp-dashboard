@@ -4,6 +4,7 @@ import { isDashboardTheme, type DashboardTheme } from '../shared/dashboard-theme
 export interface SharedSettings {
   countdownDates: CountdownData[];
   yearlyCountdownDates: CountdownData[];
+  countdownTimeDisplayDays: number;
   userChimeTimes: ChimeTime[];
   isChimeEnabled: boolean;
   isPreChimeEnabled: boolean;
@@ -15,6 +16,7 @@ export interface SharedSettings {
 export const SHARED_SETTING_KEYS = [
   'countdownDates',
   'yearlyCountdownDates',
+  'countdownTimeDisplayDays',
   'userChimeTimes',
   'isChimeEnabled',
   'isPreChimeEnabled',
@@ -33,6 +35,7 @@ export interface SharedSettingsResponse {
 export const DEFAULT_SHARED_SETTINGS_POLICY: SharedSettingsPolicy = {
   countdownDates: true,
   yearlyCountdownDates: true,
+  countdownTimeDisplayDays: true,
   userChimeTimes: true,
   isChimeEnabled: true,
   isPreChimeEnabled: true,
@@ -79,6 +82,14 @@ export function restoreLocalSettingsBackup(): number {
   const chimeTimes = parseArray("chimeTimes");
   if (countdowns) restored.countdownDates = countdowns as CountdownData[];
   if (yearlyCountdowns) restored.yearlyCountdownDates = yearlyCountdowns as CountdownData[];
+  if (typeof values.countdownTimeDisplayDays === 'string') {
+    try {
+      const value: unknown = JSON.parse(values.countdownTimeDisplayDays as string);
+      if (typeof value === 'number' && Number.isInteger(value) && value >= 1 && value <= 30) restored.countdownTimeDisplayDays = value;
+    } catch {
+      // Keep the shared default if the saved value is invalid.
+    }
+  }
   if (chimeTimes) restored.userChimeTimes = chimeTimes as ChimeTime[];
 
   for (const [key, target] of [
@@ -98,6 +109,7 @@ export function restoreLocalSettingsBackup(): number {
 
   if (restored.countdownDates) countdownDates().value = restored.countdownDates;
   if (restored.yearlyCountdownDates) yearlyCountdownDates().value = restored.yearlyCountdownDates;
+  if (typeof restored.countdownTimeDisplayDays === 'number') countdownTimeDisplayDays().value = restored.countdownTimeDisplayDays;
   if (restored.userChimeTimes) userChimeTimes().value = restored.userChimeTimes;
   if (typeof restored.isChimeEnabled === "boolean") isChimeEnabled().value = restored.isChimeEnabled;
   if (typeof restored.isPreChimeEnabled === "boolean") isPreChimeEnabled().value = restored.isPreChimeEnabled;
@@ -114,9 +126,13 @@ function isSharedSettings(value: unknown): value is SharedSettings {
 
   const settings = value as Record<string, unknown>;
 
+  if (settings.countdownTimeDisplayDays === undefined) settings.countdownTimeDisplayDays = 10;
+  const countdownTimeDisplayDaysValue = settings.countdownTimeDisplayDays;
+
   return (
     Array.isArray(settings.countdownDates) &&
     Array.isArray(settings.yearlyCountdownDates) &&
+    typeof countdownTimeDisplayDaysValue === 'number' && Number.isInteger(countdownTimeDisplayDaysValue) && countdownTimeDisplayDaysValue >= 1 && countdownTimeDisplayDaysValue <= 30 &&
     Array.isArray(settings.userChimeTimes) &&
     typeof settings.isChimeEnabled === "boolean" &&
     typeof settings.isPreChimeEnabled === "boolean" &&
@@ -137,6 +153,7 @@ export function applySharedSettingsToClient(
 ): void {
   if (apply.countdownDates) countdownDates().value = settings.countdownDates;
   if (apply.yearlyCountdownDates) yearlyCountdownDates().value = settings.yearlyCountdownDates;
+  if (apply.countdownTimeDisplayDays) countdownTimeDisplayDays().value = settings.countdownTimeDisplayDays;
   if (apply.userChimeTimes) userChimeTimes().value = settings.userChimeTimes;
   if (apply.isChimeEnabled) isChimeEnabled().value = settings.isChimeEnabled;
   if (apply.isPreChimeEnabled) isPreChimeEnabled().value = settings.isPreChimeEnabled;

@@ -95,6 +95,7 @@ function chimeKindFromPath(pathname: string): ChimeKind | null {
 const sharedSettingKeys = [
   "countdownDates",
   "yearlyCountdownDates",
+  "countdownTimeDisplayDays",
   "userChimeTimes",
   "isChimeEnabled",
   "isPreChimeEnabled",
@@ -109,6 +110,7 @@ type SharedSettingsApply = Record<(typeof sharedSettingKeys)[number], boolean>;
 const defaultSharedSettingsApply: SharedSettingsApply = {
   countdownDates: true,
   yearlyCountdownDates: true,
+  countdownTimeDisplayDays: true,
   userChimeTimes: true,
   isChimeEnabled: true,
   isPreChimeEnabled: true,
@@ -137,6 +139,8 @@ function isSharedSettingsPatch(value: unknown): value is Record<string, unknown>
     if (!(key in record)) continue;
     if (key === "isChimeEnabled" || key === "isPreChimeEnabled" || key === "isBannerVisible" || key === "isVerticalBanner") {
       if (typeof record[key] !== "boolean") return false;
+    } else if (key === "countdownTimeDisplayDays") {
+      if (typeof record[key] !== "number" || !Number.isInteger(record[key]) || record[key] < 1 || record[key] > 30) return false;
     } else if (!Array.isArray(record[key])) {
       return false;
     }
@@ -778,8 +782,8 @@ export default {
       const currentSettings = settingsRow ? JSON.parse(settingsRow.settingsJson) as Record<string, unknown> : {};
       let currentApply = defaultSharedSettingsApply;
       try { if (settingsRow) currentApply = parseSharedSettingsApply(JSON.parse(settingsRow.applyJson)) ?? defaultSharedSettingsApply; } catch { /* use defaults */ }
-      const labels: Record<string, string> = { countdownDates: "カウントダウン予定", yearlyCountdownDates: "毎年の予定", userChimeTimes: "チャイム時刻", isChimeEnabled: "チャイム", isPreChimeEnabled: "予鈴", isBannerVisible: "横バナー", isVerticalBanner: "縦バナー", dashboardTheme: "全端末のテーマ" };
-      const valueText = (value: unknown) => typeof value === "boolean" ? (value ? "有効" : "無効") : Array.isArray(value) ? `${value.length}件` : typeof value === "string" ? value : value == null ? "各端末の設定" : "変更あり";
+      const labels: Record<string, string> = { countdownDates: "カウントダウン予定", yearlyCountdownDates: "毎年の予定", countdownTimeDisplayDays: "残り時間の表示開始", userChimeTimes: "チャイム時刻", isChimeEnabled: "チャイム", isPreChimeEnabled: "予鈴", isBannerVisible: "横バナー", isVerticalBanner: "縦バナー", dashboardTheme: "全端末のテーマ" };
+      const valueText = (value: unknown) => typeof value === "boolean" ? (value ? "有効" : "無効") : typeof value === "number" ? `${value}日前` : Array.isArray(value) ? `${value.length}件` : typeof value === "string" ? value : value == null ? "各端末の設定" : "変更あり";
       response = Response.json({ requests: result.results.map((row) => {
         const payload = JSON.parse(String(row.payloadJson)) as Record<string, unknown>;
         let summary = String(row.summary);
@@ -1016,6 +1020,7 @@ export default {
           kind = "settings";
           const labels: Record<string, string> = {
             countdownDates: "カウントダウン予定", yearlyCountdownDates: "毎年の予定", userChimeTimes: "チャイム時刻",
+            countdownTimeDisplayDays: "残り時間の表示開始",
             isChimeEnabled: "チャイム", isPreChimeEnabled: "予鈴", isBannerVisible: "横バナー", isVerticalBanner: "縦バナー", dashboardTheme: "全端末のテーマ",
           };
           const settings = (body.settings ?? {}) as Record<string, unknown>;
@@ -1037,6 +1042,7 @@ export default {
           }
           const describeValue = (key: string, value: unknown) => {
             if (typeof value === "boolean") return value ? "有効" : "無効";
+            if (typeof value === "number") return `${value}日前`;
             if (Array.isArray(value)) return `${value.length}件`;
             return typeof value === "string" ? value : value == null ? "各端末の設定" : "変更あり";
           };

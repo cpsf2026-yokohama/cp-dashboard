@@ -100,6 +100,7 @@ const bannerDeleting = ref<SharedBannerKind | null>(null)
 const settingLabels: Record<keyof SharedSettingsPolicy, string> = {
   countdownDates: '日付指定カウントダウン',
   yearlyCountdownDates: '毎年のカウントダウン',
+  countdownTimeDisplayDays: '残り時間の表示開始',
   userChimeTimes: 'チャイム時刻',
   isChimeEnabled: 'チャイムの有効状態',
   isPreChimeEnabled: '予鈴の有効状態',
@@ -1063,6 +1064,7 @@ function openSchedule() {
               <label class="check-field"><input v-model="sharedSettings.isBannerVisible" type="checkbox"><span>横型バナーを表示する</span></label>
               <label class="check-field"><input v-model="sharedSettings.isVerticalBanner" type="checkbox"><span>縦型バナーを表示する</span></label>
             </div>
+            <label class="field max-w-sm"><span>残り時間を表示し始めるタイミング</span><select v-model.number="sharedSettings.countdownTimeDisplayDays"><option v-for="days in 30" :key="days" :value="days">イベントの{{ days }}日前から</option></select><small class="help">設定した日数以内になると、プレビューと各端末に「○日と○時間」と表示します。</small></label>
             <div class="admin-setting-block">
               <div class="section-heading">
                 <div><h3>バナー画像</h3><p class="help">画像は分割してサーバーへ保存し、メンター承認後に各サイトへ配信します。PNG・JPEG・WebP・GIF・AVIF、1 GiB以下。</p></div>

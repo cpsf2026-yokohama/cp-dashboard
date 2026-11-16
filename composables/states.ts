@@ -51,6 +51,8 @@ export const preChimePlayed = () => useState<Map<string, boolean>>('preChimePlay
 export const countdownDates = () => useLocalStorage<CountdownData[]>('countdownDates', () => []);
 // カウントダウンに表示する日付の一覧 (毎年)
 export const yearlyCountdownDates = () => useLocalStorage<CountdownData[]>('yearlyCountdownDates', () => kYearlyCountdownDates);
+// 残り時間を表示し始める日数
+export const countdownTimeDisplayDays = () => useLocalStorage<number>('countdownTimeDisplayDays', () => 10);
 
 // タイマーのインターバル
 export const interval = () => useState<Pausable | null>('interval', () => null);
