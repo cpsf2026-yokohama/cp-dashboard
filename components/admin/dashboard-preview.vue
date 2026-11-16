@@ -58,8 +58,11 @@ const countdownIsUrgent = computed(() => nextEvent.value !== null
 const countdownRemainingTime = computed(() => {
   const remainingDays = nextEvent.value ? calcLimitDays(nextEvent.value.eventDate, now.value) : null
   if (!nextEvent.value || remainingDays === null || remainingDays > props.settings.countdownTimeDisplayDays || remainingDays < 1) return null
-  const totalHours = Math.floor(Math.max(0, nextEvent.value.eventDate.diff(now.value)) / (60 * 60 * 1000))
-  return `${Math.floor(totalHours / 24)}日と${totalHours % 24}時間`
+  const totalSeconds = Math.floor(Math.max(0, nextEvent.value.eventDate.diff(now.value)) / 1000)
+  const hours = Math.floor(totalSeconds / 3600) % 24
+  const minutes = Math.floor(totalSeconds / 60) % 60
+  const seconds = totalSeconds % 60
+  return [hours, minutes, seconds].map(value => String(value).padStart(2, '0')).join(':')
 })
 
 const activeHorizontalBanner = computed(() => props.pendingHorizontalBannerUrl || props.horizontalBannerUrl)
@@ -113,7 +116,7 @@ const activeVerticalBanner = computed(() => props.pendingVerticalBannerUrl || pr
           </div>
           <span v-if="countdownIsToday" class="preview-today">本日開催！</span>
           <span v-else-if="nextEvent" class="preview-countdown-label">次の予定まで</span>
-          <span v-if="countdownRemainingTime" class="preview-countdown-time">残り時間 {{ countdownRemainingTime }}</span>
+          <span v-if="countdownRemainingTime" class="preview-countdown-time">{{ countdownRemainingTime }}</span>
         </div>
       </aside>
     </div>
