@@ -110,15 +110,15 @@ const verticalBanner = verticalBannerSource();
       <div
         :class="['radial-progress', 'text-[4vw]', 'max-2xl:text-6xl', 'font-bold', needCountdownAlert && !isEventDay ? 'text-red-600' : 'text-primary', isEventDay ? 'event-day-progress' : '']"
         :style="{ '--value': countdownRatio, '--size': wSize >= 1536 ? '15vw' : '220px', '--thickness': wSize >= 1536 ? '2vw' : '30px' }">
-        <span>{{ Math.floor(countdownLimitDays) }}日</span>
+        <span>{{ Math.max(0, Math.floor(countdownLimitDays) - 1) }}日</span>
       </div>
       <div v-if="isEventDay" class="event-day-celebration" role="status" aria-live="polite">
         <span aria-hidden="true">✦</span>
         <strong>本日開催！</strong>
         <span aria-hidden="true">✦</span>
       </div>
-      <div v-if="countdownLimitDays >= 1 && countdownLimitDays <= countdownTimeDisplayDaysState" class="mt-3 flex flex-col items-center">
-        <div class="text-[2.5vw] font-bold text-red-600">{{ countdownTimeText }}</div>
+      <div v-if="countdownLimitDays >= 1 && countdownLimitDays <= countdownTimeDisplayDaysState" class="mt-1 flex flex-col items-center">
+        <div :class="['text-[2.5vw]', 'font-bold', needCountdownAlert && !isEventDay ? 'text-red-600' : 'text-primary']">{{ countdownTimeText }}</div>
       </div>
     </div>
   </div>

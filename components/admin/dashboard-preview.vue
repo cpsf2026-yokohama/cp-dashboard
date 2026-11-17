@@ -45,7 +45,7 @@ const nextEvent = computed(() => {
 })
 
 const countdownDays = computed(() => nextEvent.value
-  ? Math.max(0, Math.floor(calcLimitDays(nextEvent.value.eventDate, now.value)))
+  ? Math.max(0, Math.floor(calcLimitDays(nextEvent.value.eventDate, now.value)) - 1)
   : null)
 const countdownProgress = computed(() => nextEvent.value
   ? Math.min(100, Math.max(0, calcRatio(nextEvent.value.eventDate, now.value)))
@@ -116,7 +116,11 @@ const activeVerticalBanner = computed(() => props.pendingVerticalBannerUrl || pr
           </div>
           <span v-if="countdownIsToday" class="preview-today">本日開催！</span>
           <span v-else-if="nextEvent" class="preview-countdown-label">次の予定まで</span>
-          <span v-if="countdownRemainingTime" class="preview-countdown-time">{{ countdownRemainingTime }}</span>
+          <span
+            v-if="countdownRemainingTime"
+            class="preview-countdown-time"
+            :class="{ urgent: countdownIsUrgent && !countdownIsToday, today: countdownIsToday }"
+          >{{ countdownRemainingTime }}</span>
         </div>
       </aside>
     </div>
@@ -362,10 +366,19 @@ const activeVerticalBanner = computed(() => props.pendingVerticalBannerUrl || pr
 }
 
 .preview-countdown-time {
-  color: #dc2626;
+  color: #1d4ed8;
   font-size: clamp(9px, 1.1cqw, 15px);
   font-weight: 700;
   font-variant-numeric: tabular-nums;
+  margin-top: -4px;
+}
+
+.preview-countdown-time.urgent {
+  color: #dc2626;
+}
+
+.preview-countdown-time.today {
+  color: #d97706;
 }
 
 .preview-vertical-banner {
