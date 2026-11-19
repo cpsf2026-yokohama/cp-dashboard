@@ -19,7 +19,7 @@ interface Env {
 const allowedOrigin = "http://localhost:3000";
 
 const localAdminId = "local-test-admin";
-const bannerKinds = ["horizontal", "vertical"] as const;
+const bannerKinds = ["horizontal", "vertical", "intermission"] as const;
 type BannerKind = (typeof bannerKinds)[number];
 const maxBannerBytes = 1024 * 1024 * 1024;
 const maxBannerSingleRequestBytes = 10 * 1024 * 1024;
@@ -29,22 +29,22 @@ type ChimeKind = (typeof chimeKinds)[number];
 const maxChimeBytes = 10 * 1024 * 1024;
 
 function bannerKindFromPath(pathname: string): BannerKind | null {
-  const match = /^\/api\/banners\/(horizontal|vertical)$/.exec(pathname);
+  const match = /^\/api\/banners\/(horizontal|vertical|intermission)$/.exec(pathname);
   return (match?.[1] as BannerKind | undefined) ?? null;
 }
 
 function bannerUploadStartKindFromPath(pathname: string): BannerKind | null {
-  const match = /^\/api\/banners\/(horizontal|vertical)\/uploads$/.exec(pathname);
+  const match = /^\/api\/banners\/(horizontal|vertical|intermission)\/uploads$/.exec(pathname);
   return (match?.[1] as BannerKind | undefined) ?? null;
 }
 
 function bannerUploadTokenFromPath(pathname: string, action: "part" | "complete" | "abort"):
   { kind: BannerKind; token: string; partNumber?: number } | null {
   const match = action === "part"
-    ? /^\/api\/banners\/(horizontal|vertical)\/uploads\/([0-9a-f-]{36})\/parts\/(\d+)$/.exec(pathname)
+    ? /^\/api\/banners\/(horizontal|vertical|intermission)\/uploads\/([0-9a-f-]{36})\/parts\/(\d+)$/.exec(pathname)
     : action === "complete"
-      ? /^\/api\/banners\/(horizontal|vertical)\/uploads\/([0-9a-f-]{36})\/complete$/.exec(pathname)
-      : /^\/api\/banners\/(horizontal|vertical)\/uploads\/([0-9a-f-]{36})$/.exec(pathname);
+      ? /^\/api\/banners\/(horizontal|vertical|intermission)\/uploads\/([0-9a-f-]{36})\/complete$/.exec(pathname)
+      : /^\/api\/banners\/(horizontal|vertical|intermission)\/uploads\/([0-9a-f-]{36})$/.exec(pathname);
   if (!match) return null;
   return {
     kind: match[1] as BannerKind,
@@ -102,7 +102,6 @@ const sharedSettingKeys = [
   "isBannerVisible",
   "isVerticalBanner",
   "intermissionLayoutEnabled",
-  "intermissionGifUrl",
   "intermissionClockScale",
 ] as const;
 
@@ -120,7 +119,6 @@ const defaultSharedSettingsApply: SharedSettingsApply = {
   isBannerVisible: true,
   isVerticalBanner: true,
   intermissionLayoutEnabled: true,
-  intermissionGifUrl: true,
   intermissionClockScale: true,
 };
 
@@ -145,11 +143,6 @@ function isSharedSettingsPatch(value: unknown): value is Record<string, unknown>
     if (!(key in record)) continue;
     if (key === "isChimeEnabled" || key === "isPreChimeEnabled" || key === "isBannerVisible" || key === "isVerticalBanner" || key === "intermissionLayoutEnabled") {
       if (typeof record[key] !== "boolean") return false;
-    } else if (key === "intermissionGifUrl") {
-      if (typeof record[key] !== "string" || record[key].length > 2048) return false;
-      if (record[key] !== "") {
-        try { if (new URL(record[key] as string).protocol !== "https:") return false; } catch { return false; }
-      }
     } else if (key === "intermissionClockScale") {
       if (typeof record[key] !== "number" || !Number.isFinite(record[key]) || record[key] < 3 || record[key] > 16) return false;
     } else if (key === "countdownTimeDisplayDays") {
@@ -202,7 +195,7 @@ export function requiresAccessAuthentication(method: string, pathname: string): 
     (method === "POST" && /^\/api\/change-requests\/[^/]+\/(approve|reject)$/.test(pathname)) ||
     (method === "DELETE" && /^\/api\/change-requests\/[^/]+$/.test(pathname)) ||
     (method === "PUT" && pathname === "/api/settings") ||
-    ((method === "PUT" || method === "DELETE") && /^\/api\/banners\/(horizontal|vertical)$/.test(pathname)) ||
+    ((method === "PUT" || method === "DELETE") && /^\/api\/banners\/(horizontal|vertical|intermission)$/.test(pathname)) ||
     ((method === "PUT" || method === "DELETE") && /^\/api\/chimes\/(chime|pre-chime)$/.test(pathname)) ||
     (method === "GET" &&
       ["/api/schedules", "/api/videos", "/api/users"].includes(pathname)) ||
@@ -223,7 +216,7 @@ export function hasRoleForRoute(user: Pick<ApiUser, "role">, method: string, pat
   if (method === "POST" && /^\/api\/change-requests\/[^/]+\/(approve|reject)$/.test(pathname)) return user.role === "mentor";
   if (
     (method === "PUT" && pathname === "/api/settings") ||
-    ((method === "PUT" || method === "DELETE") && /^\/api\/banners\/(horizontal|vertical)$/.test(pathname)) ||
+    ((method === "PUT" || method === "DELETE") && /^\/api\/banners\/(horizontal|vertical|intermission)$/.test(pathname)) ||
     ((method === "PUT" || method === "DELETE") && /^\/api\/chimes\/(chime|pre-chime)$/.test(pathname)) ||
     (method === "POST" && bannerUploadStartKindFromPath(pathname) !== null) ||
     (method === "PUT" && bannerUploadTokenFromPath(pathname, "part") !== null) ||
@@ -604,7 +597,7 @@ export function expandPlaybackSchedules(rows: PlaybackScheduleRow[], windowStart
 
 function isDashboardMutation(method: string, pathname: string): boolean {
   return (method === "PUT" && pathname === "/api/settings") ||
-    ((method === "PUT" || method === "DELETE") && /^\/api\/banners\/(horizontal|vertical)$/.test(pathname)) ||
+    ((method === "PUT" || method === "DELETE") && /^\/api\/banners\/(horizontal|vertical|intermission)$/.test(pathname)) ||
     ((method === "PUT" || method === "DELETE") && /^\/api\/chimes\/(chime|pre-chime)$/.test(pathname)) ||
     (method === "POST" && pathname === "/api/schedules") ||
     (method === "DELETE" && (/^\/api\/schedules\/[^/]+$/.test(pathname) || /^\/api\/videos\/[^/]+$/.test(pathname)));
@@ -897,7 +890,7 @@ export default {
         } else {
           const contentType = typeof body.contentType === "string" ? body.contentType.trim().toLowerCase() : "";
           const fileSize = body.fileSize;
-          if (!/^image\/(png|jpeg|webp|gif|avif)$/.test(contentType) || typeof fileSize !== "number" || !Number.isSafeInteger(fileSize) || fileSize < 1) {
+          if ((kind === "intermission" ? contentType !== "image/gif" : !/^image\/(png|jpeg|webp|gif|avif)$/.test(contentType)) || typeof fileSize !== "number" || !Number.isSafeInteger(fileSize) || fileSize < 1) {
             response = jsonError("A supported image type and valid file size are required", 400);
           } else if (fileSize > maxBannerBytes) {
             response = jsonError("Banner image must be 1 GiB or smaller", 413);
@@ -974,12 +967,13 @@ export default {
               customMetadata.kind === route.kind &&
               customMetadata.requesterId === accessUser!.id &&
               customMetadata.expectedSize === String(fileSize);
-            if (!object || object.size !== fileSize || !matchesUpload || !/^image\/(png|jpeg|webp|gif|avif)$/.test(contentType)) {
+            const supportedType = route.kind === "intermission" ? contentType === "image/gif" : /^image\/(png|jpeg|webp|gif|avif)$/.test(contentType);
+            if (!object || object.size !== fileSize || !matchesUpload || !supportedType) {
               console.error("Completed banner validation failed:", {
                 objectFound: object !== null,
                 sizeMatches: object?.size === fileSize,
                 metadataMatchesUpload: matchesUpload,
-                contentTypeValid: /^image\/(png|jpeg|webp|gif|avif)$/.test(contentType),
+                contentTypeValid: supportedType,
               });
               await env.VIDEO_BUCKET.delete(key);
               completedKey = null;
@@ -991,7 +985,7 @@ export default {
                   stagingKey: key,
                   contentType,
                   sizeBytes: fileSize,
-                }, `${route.kind === "horizontal" ? "横" : "縦"}型バナーを更新`);
+                }, route.kind === "intermission" ? "チャイム間GIFを更新" : `${route.kind === "horizontal" ? "横" : "縦"}型バナーを更新`);
                 response = Response.json({ success: true, requestId, status: "pending" }, { status: 202 });
               } catch (error) {
                 await env.VIDEO_BUCKET.delete(key).catch(() => undefined);
@@ -1065,17 +1059,17 @@ export default {
           summary = descriptions.length ? descriptions.join("・") : "共有設定を変更";
           payload = { settings, apply: body.apply, beforeSettings, beforeApply, changes, applyChanges, adminEdit: body.adminEdit === true };
         } else if (bannerKind && request.method === "DELETE") {
-          kind = "banner.delete"; summary = `${bannerKind === "horizontal" ? "横" : "縦"}型バナーを削除`; payload = { kind: bannerKind };
+          kind = "banner.delete"; summary = bannerKind === "intermission" ? "チャイム間GIFを削除" : `${bannerKind === "horizontal" ? "横" : "縦"}型バナーを削除`; payload = { kind: bannerKind };
         } else if (bannerKind && request.method === "PUT") {
           const contentType = request.headers.get("Content-Type")?.split(";")[0].trim().toLowerCase() ?? "";
-          if (!/^image\/(png|jpeg|webp|gif|avif)$/.test(contentType)) throw new Error("PNG/JPEG/WebP/GIF/AVIF画像を指定してください");
+          if (bannerKind === "intermission" ? contentType !== "image/gif" : !/^image\/(png|jpeg|webp|gif|avif)$/.test(contentType)) throw new Error(bannerKind === "intermission" ? "GIFファイルを指定してください" : "PNG/JPEG/WebP/GIF/AVIF画像を指定してください");
           const bytes = await readRequestBodyAtMost(request, maxBannerSingleRequestBytes);
           if (!bytes) throw new PayloadTooLargeError("画像変更にはmultipartアップロードを使用してください（単一リクエストは10 MiB以下）");
           if (bytes.byteLength < 1) throw new Error("画像ファイルが空です");
           const stagingKey = `pending/${crypto.randomUUID()}`;
           stagingKeyToCleanup = stagingKey;
           await env.VIDEO_BUCKET.put(stagingKey, bytes, { httpMetadata: { contentType } });
-          kind = "banner.upload"; summary = `${bannerKind === "horizontal" ? "横" : "縦"}型バナーを更新`; payload = { kind: bannerKind, stagingKey, contentType };
+          kind = "banner.upload"; summary = bannerKind === "intermission" ? "チャイム間GIFを更新" : `${bannerKind === "horizontal" ? "横" : "縦"}型バナーを更新`; payload = { kind: bannerKind, stagingKey, contentType };
         } else if (chimeKindFromPath(url.pathname) && request.method === "DELETE") {
           const audioKind = chimeKindFromPath(url.pathname)!;
           kind = "chime.delete"; summary = `${audioKind === "chime" ? "チャイム" : "予鈴チャイム"}音声を削除`; payload = { kind: audioKind };

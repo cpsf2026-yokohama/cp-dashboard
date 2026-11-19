@@ -87,15 +87,15 @@ const sharedSettings = ref<SharedSettings | null>(null)
 const settingsValuesSaving = ref(false)
 const savedDashboardTheme = ref<DashboardTheme | null>(null)
 const themeSaving = ref(false)
-const bannerInfo = ref<Record<SharedBannerKind, SharedBannerInfo | null>>({ horizontal: null, vertical: null })
+const bannerInfo = ref<Record<SharedBannerKind, SharedBannerInfo | null>>({ horizontal: null, vertical: null, intermission: null })
 const chimeInfo = ref<Record<SharedChimeKind, SharedChimeInfo | null>>({ chime: null, 'pre-chime': null })
 const chimeInfoLoadError = ref(false)
 const chimeBusy = ref<SharedChimeKind | null>(null)
-const pendingBannerPreviewUrls = ref<Record<SharedBannerKind, string | null>>({ horizontal: null, vertical: null })
+const pendingBannerPreviewUrls = ref<Record<SharedBannerKind, string | null>>({ horizontal: null, vertical: null, intermission: null })
 const showDashboardPreview = ref(false)
 const bannerUploading = ref<SharedBannerKind | null>(null)
 const bannerUploadProgress = ref(0)
-const bannerUploadPreviewOmitted = ref<Record<SharedBannerKind, boolean>>({ horizontal: false, vertical: false })
+const bannerUploadPreviewOmitted = ref<Record<SharedBannerKind, boolean>>({ horizontal: false, vertical: false, intermission: false })
 const bannerDeleting = ref<SharedBannerKind | null>(null)
 const settingLabels: Record<keyof SharedSettingsPolicy, string> = {
   countdownDates: '日付指定カウントダウン',
@@ -107,7 +107,6 @@ const settingLabels: Record<keyof SharedSettingsPolicy, string> = {
   isBannerVisible: '横型バナーの表示状態',
   isVerticalBanner: '縦型バナーの表示状態',
   intermissionLayoutEnabled: 'チャイム間GIFレイアウト',
-  intermissionGifUrl: 'チャイム間GIF',
   intermissionClockScale: 'チャイム間時計サイズ',
 }
 
@@ -357,7 +356,12 @@ async function uploadBanner(kind: SharedBannerKind, event: Event) {
   if (!(input instanceof HTMLInputElement)) return
   const file = input.files?.[0]
   if (!file) return
-  const label = kind === 'horizontal' ? '横型バナーの変更申請' : '縦型バナーの変更申請'
+  const label = kind === 'intermission' ? 'チャイム間GIFの変更申請' : kind === 'horizontal' ? '横型バナーの変更申請' : '縦型バナーの変更申請'
+  if (kind === 'intermission' && file.type !== 'image/gif') {
+    showNotice('チャイム間画像にはGIFファイルを選択してください。')
+    input.value = ''
+    return
+  }
   if (!confirmRequestSubmission(label)) {
     input.value = ''
     return
@@ -373,7 +377,9 @@ async function uploadBanner(kind: SharedBannerKind, event: Event) {
       bannerUploadProgress.value = Math.floor((uploadedBytes / totalBytes) * 100)
     })
     bannerInfo.value = await loadSharedBanners()
-    showNotice('バナーの変更を申請しました。メンターの承認後にサイトへ反映されます。')
+    showNotice(kind === 'intermission'
+      ? 'チャイム間GIFの変更を申請しました。メンターの承認後にサイトへ反映されます。'
+      : 'バナーの変更を申請しました。メンターの承認後にサイトへ反映されます。')
   } catch (error) {
     const failedPreviewUrl = pendingBannerPreviewUrls.value[kind]
     if (failedPreviewUrl) URL.revokeObjectURL(failedPreviewUrl)
@@ -388,14 +394,16 @@ async function uploadBanner(kind: SharedBannerKind, event: Event) {
 }
 
 async function removeBanner(kind: SharedBannerKind) {
-  const label = kind === 'horizontal' ? '横型' : '縦型'
+  const label = kind === 'intermission' ? 'チャイム間GIF' : kind === 'horizontal' ? '横型' : '縦型'
   if (!bannerInfo.value[kind] || bannerDeleting.value) return
-  if (!window.confirm(`${label}バナー画像をサーバーから削除しますか？`)) return
+  if (!window.confirm(`${label}${kind === 'intermission' ? '' : 'バナー'}画像をサーバーから削除しますか？`)) return
   bannerDeleting.value = kind
   try {
     await deleteSharedBanner(kind)
     bannerInfo.value = await loadSharedBanners()
-    showNotice('バナー削除を申請しました。メンターの承認後に反映されます。')
+    showNotice(kind === 'intermission'
+      ? 'チャイム間GIFの削除を申請しました。メンターの承認後に反映されます。'
+      : 'バナー削除を申請しました。メンターの承認後に反映されます。')
   } catch (error) {
     showNotice(`バナーを削除できませんでした：${error instanceof Error ? error.message : '不明なエラー'}`, true)
   } finally {
@@ -1073,10 +1081,10 @@ function openSchedule() {
               </div>
               <div class="settings-value-grid">
                 <label class="check-field"><input v-model="sharedSettings.intermissionLayoutEnabled" type="checkbox"><span>GIF画面を有効にする</span></label>
-                <label class="field"><span>GIF画像のHTTPS URL</span><input v-model="sharedSettings.intermissionGifUrl" type="url" maxlength="2048" placeholder="https://example.com/image.gif"></label>
+                <div class="field"><span>GIF画像</span><p class="help">下の「チャイム間GIF」カードからファイルをアップロードしてください。</p></div>
                 <label class="field"><span>時計サイズ: {{ sharedSettings.intermissionClockScale }}vw</span><input v-model.number="sharedSettings.intermissionClockScale" type="range" min="3" max="16" step="1"></label>
               </div>
-              <p class="help">GIFはHTTPSで公開された画像URLを指定してください。設定を保存すると、メンター承認後に全端末へ反映されます。</p>
+              <p class="help">GIFと表示設定はそれぞれ申請され、メンター承認後に全端末へ反映されます。</p>
             </section>
             <label class="field max-w-sm"><span>残り時間を表示し始めるタイミング</span><select v-model.number="sharedSettings.countdownTimeDisplayDays"><option v-for="days in 30" :key="days" :value="days">イベントの{{ days }}日前から</option></select><small class="help">設定した日数以内になると、プレビューと各端末に「○日と○時間」と表示します。</small></label>
             <div class="admin-setting-block">
@@ -1087,6 +1095,7 @@ function openSchedule() {
                 <article v-for="item in [
                   { kind: 'horizontal' as const, title: '横型バナー', recommendation: '推奨 1700 × 300 px' },
                   { kind: 'vertical' as const, title: '縦型バナー', recommendation: '推奨 920 × 1600 px' },
+                  { kind: 'intermission' as const, title: 'チャイム間GIF', recommendation: 'GIFアニメーションをアップロード' },
                 ]" :key="item.kind" class="banner-management-card">
                   <div class="banner-preview">
                     <img v-if="pendingBannerPreviewUrls[item.kind] || (bannerInfo[item.kind] && !bannerUploadPreviewOmitted[item.kind])" :src="pendingBannerPreviewUrls[item.kind] || bannerInfo[item.kind]!.url" :alt="`${item.title}${pendingBannerPreviewUrls[item.kind] ? 'の申請画像' : ''}のプレビュー`">
@@ -1097,7 +1106,7 @@ function openSchedule() {
                     <div><h4>{{ item.title }}</h4><p class="help">{{ bannerUploadPreviewOmitted[item.kind] ? '大容量の申請画像（プレビュー省略）' : pendingBannerPreviewUrls[item.kind] ? '今回の申請画像（この画面でプレビュー中）' : bannerInfo[item.kind] ? `${(bannerInfo[item.kind]!.size / (1024 * 1024)).toFixed(2)} MiB` : item.recommendation }}</p></div>
                     <button v-if="bannerInfo[item.kind]" class="button button-small button-danger" :disabled="bannerDeleting !== null || bannerUploading !== null" @click="void removeBanner(item.kind)">{{ bannerDeleting === item.kind ? '削除中...' : '画像を削除' }}</button>
                   </div>
-                  <label class="field"><span>{{ bannerInfo[item.kind] ? '画像を差し替え' : '画像を追加' }}</span><input type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/avif" :disabled="bannerUploading !== null || bannerDeleting !== null" @change="uploadBanner(item.kind, $event)"></label>
+                  <label class="field"><span>{{ bannerInfo[item.kind] ? '画像を差し替え' : '画像を追加' }}</span><input type="file" :accept="item.kind === 'intermission' ? 'image/gif' : 'image/png,image/jpeg,image/webp,image/gif,image/avif'" :disabled="bannerUploading !== null || bannerDeleting !== null" @change="uploadBanner(item.kind, $event)"></label>
                   <p v-if="bannerUploading === item.kind" class="help" role="status">アップロード中 {{ bannerUploadProgress }}%</p>
                   <p class="help">{{ item.recommendation }}</p>
                 </article>

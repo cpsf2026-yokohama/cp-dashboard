@@ -29,7 +29,6 @@ export default defineNuxtPlugin(async (nuxtApp) => {
     isBannerVisible: isBannerVisible().value,
     isVerticalBanner: isVerticalBanner().value,
     intermissionLayoutEnabled: intermissionLayoutEnabled().value,
-    intermissionGifUrl: intermissionGifUrl().value,
     intermissionClockScale: intermissionClockScale().value,
   } satisfies SharedSettings);
 
@@ -45,7 +44,6 @@ export default defineNuxtPlugin(async (nuxtApp) => {
       isBannerVisible: 'isBannerVisible',
       isVerticalBanner: 'isVerticalBanner',
       intermissionLayoutEnabled: 'intermissionLayoutEnabled',
-      intermissionGifUrl: 'intermissionGifUrl',
       intermissionClockScale: 'intermissionClockScale',
     };
     const backup = Object.fromEntries(
@@ -71,6 +69,7 @@ export default defineNuxtPlugin(async (nuxtApp) => {
     nuxtApp.runWithContext(() => {
       bannerSource().value = banners.horizontal?.url ?? null;
       verticalBannerSource().value = banners.vertical?.url ?? null;
+      intermissionGifSource().value = banners.intermission?.url ?? null;
     });
   };
 
@@ -129,7 +128,6 @@ export default defineNuxtPlugin(async (nuxtApp) => {
       isBannerVisible(),
       isVerticalBanner(),
       intermissionLayoutEnabled(),
-      intermissionGifUrl(),
       intermissionClockScale(),
     ];
     sources.forEach((source) => {

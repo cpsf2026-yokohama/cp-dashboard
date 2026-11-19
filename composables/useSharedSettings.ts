@@ -11,7 +11,6 @@ export interface SharedSettings {
   isBannerVisible: boolean;
   isVerticalBanner: boolean;
   intermissionLayoutEnabled: boolean;
-  intermissionGifUrl: string;
   intermissionClockScale: number;
   dashboardTheme?: DashboardTheme | null;
 }
@@ -26,7 +25,6 @@ export const SHARED_SETTING_KEYS = [
   'isBannerVisible',
   'isVerticalBanner',
   'intermissionLayoutEnabled',
-  'intermissionGifUrl',
   'intermissionClockScale',
 ] as const satisfies readonly (keyof SharedSettings)[];
 
@@ -48,7 +46,6 @@ export const DEFAULT_SHARED_SETTINGS_POLICY: SharedSettingsPolicy = {
   isBannerVisible: true,
   isVerticalBanner: true,
   intermissionLayoutEnabled: true,
-  intermissionGifUrl: true,
   intermissionClockScale: true,
 };
 
@@ -137,7 +134,6 @@ function isSharedSettings(value: unknown): value is SharedSettings {
 
   if (settings.countdownTimeDisplayDays === undefined) settings.countdownTimeDisplayDays = 10;
   if (settings.intermissionLayoutEnabled === undefined) settings.intermissionLayoutEnabled = false;
-  if (settings.intermissionGifUrl === undefined) settings.intermissionGifUrl = '';
   if (settings.intermissionClockScale === undefined) settings.intermissionClockScale = 6;
   const countdownTimeDisplayDaysValue = settings.countdownTimeDisplayDays;
 
@@ -151,7 +147,6 @@ function isSharedSettings(value: unknown): value is SharedSettings {
     typeof settings.isBannerVisible === "boolean" &&
     typeof settings.isVerticalBanner === "boolean"
     && (settings.intermissionLayoutEnabled === undefined || typeof settings.intermissionLayoutEnabled === 'boolean')
-    && (settings.intermissionGifUrl === undefined || (typeof settings.intermissionGifUrl === 'string' && settings.intermissionGifUrl.length <= 2048))
     && (settings.intermissionClockScale === undefined || (typeof settings.intermissionClockScale === 'number' && settings.intermissionClockScale >= 3 && settings.intermissionClockScale <= 16))
   );
 }
@@ -175,7 +170,6 @@ export function applySharedSettingsToClient(
   if (apply.isBannerVisible) isBannerVisible().value = settings.isBannerVisible;
   if (apply.isVerticalBanner) isVerticalBanner().value = settings.isVerticalBanner;
   if (apply.intermissionLayoutEnabled) intermissionLayoutEnabled().value = settings.intermissionLayoutEnabled ?? false;
-  if (apply.intermissionGifUrl) intermissionGifUrl().value = settings.intermissionGifUrl ?? '';
   if (apply.intermissionClockScale) intermissionClockScale().value = settings.intermissionClockScale ?? 6;
 }
 
@@ -186,7 +180,7 @@ function getSettingsApiBase(): string {
     .replace(/\/+$/, "");
 }
 
-export type SharedBannerKind = 'horizontal' | 'vertical';
+export type SharedBannerKind = 'horizontal' | 'vertical' | 'intermission';
 const maxSharedBannerBytes = 1024 * 1024 * 1024;
 const fallbackBannerUploadPartBytes = 8 * 1024 * 1024;
 export type SharedChimeKind = 'chime' | 'pre-chime';
@@ -243,7 +237,7 @@ export async function loadSharedBanners(): Promise<Record<SharedBannerKind, Shar
   }
   const raw = payload.banners as Record<string, unknown>;
   const result = {} as Record<SharedBannerKind, SharedBannerInfo | null>;
-  for (const kind of ['horizontal', 'vertical'] as const) {
+  for (const kind of ['horizontal', 'vertical', 'intermission'] as const) {
     const item = raw[kind];
     if (item === null || item === undefined) {
       result[kind] = null;
@@ -276,7 +270,9 @@ export async function uploadSharedBanner(
   file: File,
   onProgress?: (uploadedBytes: number, totalBytes: number) => void,
 ): Promise<void> {
-  if (!/^image\/(png|jpeg|webp|gif|avif)$/.test(file.type)) throw new Error('PNG/JPEG/WebP/GIF/AVIF画像を選択してください');
+  if (kind === 'intermission' ? file.type !== 'image/gif' : !/^image\/(png|jpeg|webp|gif|avif)$/.test(file.type)) {
+    throw new Error(kind === 'intermission' ? 'GIFファイルを選択してください' : 'PNG/JPEG/WebP/GIF/AVIF画像を選択してください');
+  }
   if (file.size === 0 || file.size > maxSharedBannerBytes) throw new Error('画像は1 GiB以下のファイルを選択してください');
 
   const apiBase = getSettingsApiBase();

@@ -32,7 +32,7 @@ useHead({
 
 const widthState = widthScreenSize();
 const intermissionSettingEnabled = intermissionLayoutEnabled();
-const intermissionImage = intermissionGifUrl();
+const intermissionImage = intermissionGifSource();
 const chimeSchedule = userChimeTimes();
 const clockTimeState = time();
 const intermissionActive = computed(() => {
@@ -274,7 +274,7 @@ onUnmounted(() => {
 
     <!-- 大画面デバイスの表示 -->
     <div v-if="intermissionActive" class="fixed inset-0 z-[500] h-[100dvh] w-screen overflow-hidden bg-black text-white">
-      <img :src="intermissionImage" alt="" class="absolute inset-0 h-full w-full object-cover" />
+      <img :src="intermissionImage ?? undefined" alt="" class="absolute inset-0 h-full w-full object-cover" />
       <Clock intermission />
     </div>
 
