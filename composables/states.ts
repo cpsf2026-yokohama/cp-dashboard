@@ -116,5 +116,9 @@ export const isBannerVisible = () => useLocalStorage<boolean>('isBannerVisible',
 export const bannerSource = () => useState<string | null>('bannerSource', () => null);
 // 縦型バナーの表示の切り替え
 export const isVerticalBanner = () => useLocalStorage<boolean>('isVerticalBanner', () => false);
+// 本チャイムと次の本チャイムの間だけ表示する共有レイアウト
+export const intermissionLayoutEnabled = () => useLocalStorage<boolean>('intermissionLayoutEnabled', () => false);
+export const intermissionGifUrl = () => useLocalStorage<string>('intermissionGifUrl', () => '');
+export const intermissionClockScale = () => useLocalStorage<number>('intermissionClockScale', () => 6);
 // 縦バナーのソース
 export const verticalBannerSource = () => useState<string | null>('verticalBannerSource', () => null);

@@ -106,6 +106,9 @@ const settingLabels: Record<keyof SharedSettingsPolicy, string> = {
   isPreChimeEnabled: '予鈴の有効状態',
   isBannerVisible: '横型バナーの表示状態',
   isVerticalBanner: '縦型バナーの表示状態',
+  intermissionLayoutEnabled: 'チャイム間GIFレイアウト',
+  intermissionGifUrl: 'チャイム間GIF',
+  intermissionClockScale: 'チャイム間時計サイズ',
 }
 
 onBeforeUnmount(() => {
@@ -1064,6 +1067,17 @@ function openSchedule() {
               <label class="check-field"><input v-model="sharedSettings.isBannerVisible" type="checkbox"><span>横型バナーを表示する</span></label>
               <label class="check-field"><input v-model="sharedSettings.isVerticalBanner" type="checkbox"><span>縦型バナーを表示する</span></label>
             </div>
+            <section class="panel" aria-labelledby="intermission-layout-heading">
+              <div class="section-heading">
+                <div><h3 id="intermission-layout-heading">チャイム間のGIF画面</h3><p class="help">本チャイム同士の間に表示します。予鈴は切替対象になりません。最後のチャイム後も翌日の最初のチャイムまで続きます。</p></div>
+              </div>
+              <div class="settings-value-grid">
+                <label class="check-field"><input v-model="sharedSettings.intermissionLayoutEnabled" type="checkbox"><span>GIF画面を有効にする</span></label>
+                <label class="field"><span>GIF画像のHTTPS URL</span><input v-model="sharedSettings.intermissionGifUrl" type="url" maxlength="2048" placeholder="https://example.com/image.gif"></label>
+                <label class="field"><span>時計サイズ: {{ sharedSettings.intermissionClockScale }}vw</span><input v-model.number="sharedSettings.intermissionClockScale" type="range" min="3" max="16" step="1"></label>
+              </div>
+              <p class="help">GIFはHTTPSで公開された画像URLを指定してください。設定を保存すると、メンター承認後に全端末へ反映されます。</p>
+            </section>
             <label class="field max-w-sm"><span>残り時間を表示し始めるタイミング</span><select v-model.number="sharedSettings.countdownTimeDisplayDays"><option v-for="days in 30" :key="days" :value="days">イベントの{{ days }}日前から</option></select><small class="help">設定した日数以内になると、プレビューと各端末に「○日と○時間」と表示します。</small></label>
             <div class="admin-setting-block">
               <div class="section-heading">

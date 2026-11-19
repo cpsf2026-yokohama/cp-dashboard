@@ -101,6 +101,9 @@ const sharedSettingKeys = [
   "isPreChimeEnabled",
   "isBannerVisible",
   "isVerticalBanner",
+  "intermissionLayoutEnabled",
+  "intermissionGifUrl",
+  "intermissionClockScale",
 ] as const;
 
 const sharedValueKeys = [...sharedSettingKeys, "dashboardTheme"] as const;
@@ -116,6 +119,9 @@ const defaultSharedSettingsApply: SharedSettingsApply = {
   isPreChimeEnabled: true,
   isBannerVisible: true,
   isVerticalBanner: true,
+  intermissionLayoutEnabled: true,
+  intermissionGifUrl: true,
+  intermissionClockScale: true,
 };
 
 function parseSharedSettingsApply(value: unknown): SharedSettingsApply | null {
@@ -137,8 +143,15 @@ function isSharedSettingsPatch(value: unknown): value is Record<string, unknown>
   if ("dashboardTheme" in record && record.dashboardTheme !== null && !isDashboardTheme(record.dashboardTheme)) return false;
   for (const key of sharedSettingKeys) {
     if (!(key in record)) continue;
-    if (key === "isChimeEnabled" || key === "isPreChimeEnabled" || key === "isBannerVisible" || key === "isVerticalBanner") {
+    if (key === "isChimeEnabled" || key === "isPreChimeEnabled" || key === "isBannerVisible" || key === "isVerticalBanner" || key === "intermissionLayoutEnabled") {
       if (typeof record[key] !== "boolean") return false;
+    } else if (key === "intermissionGifUrl") {
+      if (typeof record[key] !== "string" || record[key].length > 2048) return false;
+      if (record[key] !== "") {
+        try { if (new URL(record[key] as string).protocol !== "https:") return false; } catch { return false; }
+      }
+    } else if (key === "intermissionClockScale") {
+      if (typeof record[key] !== "number" || !Number.isFinite(record[key]) || record[key] < 3 || record[key] > 16) return false;
     } else if (key === "countdownTimeDisplayDays") {
       if (typeof record[key] !== "number" || !Number.isInteger(record[key]) || record[key] < 1 || record[key] > 30) return false;
     } else if (!Array.isArray(record[key])) {

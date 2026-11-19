@@ -31,6 +31,28 @@ useHead({
 });
 
 const widthState = widthScreenSize();
+const intermissionSettingEnabled = intermissionLayoutEnabled();
+const intermissionImage = intermissionGifUrl();
+const chimeSchedule = userChimeTimes();
+const clockTimeState = time();
+const intermissionActive = computed(() => {
+  if (!intermissionSettingEnabled.value || !intermissionImage.value) return false;
+  const mainTimes = chimeSchedule.value
+    .filter(item => item.chime && /^([01]\d|2[0-3]):[0-5]\d$/.test(item.time))
+    .map(item => {
+      const [hours, minutes] = item.time.split(':').map(Number);
+      return hours * 60 + minutes;
+    })
+    .sort((a, b) => a - b);
+  if (!mainTimes.length) return false;
+  const current = clockTimeState.value.getHours() * 60 + clockTimeState.value.getMinutes();
+  if (mainTimes.includes(current)) return false;
+  if (mainTimes.length === 1) return true;
+  const nextIndex = mainTimes.findIndex(value => value > current);
+  // The wrap-around interval from the last daily chime to the first one
+  // remains active overnight.
+  return nextIndex === -1 || nextIndex === 0 || (current > mainTimes[nextIndex - 1] && current < mainTimes[nextIndex]);
+});
 let dashboardAudioPrimer: ((event: MouseEvent) => void) | null = null
 
 type PlaybackSchedule = {
@@ -238,7 +260,7 @@ onUnmounted(() => {
   <NuxtPwaManifest />
   <NuxtLayout v-show="!activePlayback" :background-active="!activePlayback">
     <ClientOnly>
-      <div v-if="!firstClick && !activePlayback" class="toast toast-top toast-center whitespace-normal z-50 w-full">
+      <div v-if="!firstClick && !activePlayback && !intermissionActive" class="toast toast-top toast-center whitespace-normal z-50 w-full">
         <div class="alert alert-warning">
           <Icon class="icon" name="uil:exclamation-triangle" size="30px" />
           <p>
@@ -251,7 +273,13 @@ onUnmounted(() => {
     </ClientOnly>
 
     <!-- 大画面デバイスの表示 -->
-    <div v-if="widthState >= 1280" class="min-h-[100dvh] flex flex-row text-center gap-2">
+    <div v-if="intermissionActive" class="fixed inset-0 z-[500] h-[100dvh] w-screen overflow-hidden bg-black text-white">
+      <img :src="intermissionImage" alt="" class="absolute inset-0 h-full w-full object-cover" />
+      <Clock intermission />
+    </div>
+
+    <!-- 大画面デバイスの表示 -->
+    <div v-else-if="widthState >= 1280" class="min-h-[100dvh] flex flex-row text-center gap-2">
       <div class="basis-[20.0%] flex flex-row justify-between">
         <status class="dashboard-status"></status>
       </div>
@@ -271,7 +299,7 @@ onUnmounted(() => {
     </div>
 
     <!-- 小画面デバイスの表示　-->
-    <div v-if="widthState < 1280" class="min-h-[100dvh] min-w-full flex flex-col text-center mb-2">
+    <div v-else class="min-h-[100dvh] min-w-full flex flex-col text-center mb-2">
       <div class="navbar bg-neutral">
         <div class="navbar-start">
           <button class="btn" onclick="window.location.replace(window.location.href)">

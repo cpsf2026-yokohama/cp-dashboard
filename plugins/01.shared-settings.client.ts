@@ -28,6 +28,9 @@ export default defineNuxtPlugin(async (nuxtApp) => {
     isPreChimeEnabled: isPreChimeEnabled().value,
     isBannerVisible: isBannerVisible().value,
     isVerticalBanner: isVerticalBanner().value,
+    intermissionLayoutEnabled: intermissionLayoutEnabled().value,
+    intermissionGifUrl: intermissionGifUrl().value,
+    intermissionClockScale: intermissionClockScale().value,
   } satisfies SharedSettings);
 
   const backupLocalSettingsOnce = () => {
@@ -41,6 +44,9 @@ export default defineNuxtPlugin(async (nuxtApp) => {
       isPreChimeEnabled: 'isPreChimeEnabled',
       isBannerVisible: 'isBannerVisible',
       isVerticalBanner: 'isVerticalBanner',
+      intermissionLayoutEnabled: 'intermissionLayoutEnabled',
+      intermissionGifUrl: 'intermissionGifUrl',
+      intermissionClockScale: 'intermissionClockScale',
     };
     const backup = Object.fromEntries(
       SHARED_SETTING_KEYS.map(key => [key === 'userChimeTimes' ? 'chimeTimes' : key, localStorage.getItem(storageKeys[key])]),
@@ -103,7 +109,7 @@ export default defineNuxtPlugin(async (nuxtApp) => {
     let saveTimer: ReturnType<typeof setTimeout> | undefined;
     let saveQueue = Promise.resolve();
     const save = () => {
-      const snapshot = nuxtApp.runWithContext(saveCurrentSettings);
+      const snapshot = nuxtApp.runWithContext(saveCurrentSettings) as SharedSettings;
       saveQueue = saveQueue
         .catch(() => undefined)
         .then(() => nuxtApp.runWithContext(() => saveSharedSettings(snapshot)))
@@ -122,6 +128,9 @@ export default defineNuxtPlugin(async (nuxtApp) => {
       isPreChimeEnabled(),
       isBannerVisible(),
       isVerticalBanner(),
+      intermissionLayoutEnabled(),
+      intermissionGifUrl(),
+      intermissionClockScale(),
     ];
     sources.forEach((source) => {
       watch(source, () => {

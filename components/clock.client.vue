@@ -3,6 +3,9 @@ import dayjs from 'dayjs';
 import duration from 'dayjs/plugin/duration';
 import 'dayjs/locale/ja';
 
+const props = withDefaults(defineProps<{ intermission?: boolean }>(), { intermission: false });
+const intermissionClockScaleState = intermissionClockScale();
+
 dayjs.extend(duration);
 dayjs.locale("ja");
 
@@ -24,7 +27,7 @@ watch(timerState, (remainingTime) => {
 });
 
 const mainClock = computed(() => {
-  const currentTime = timerState.value ?? [
+  const currentTime = (!props.intermission ? timerState.value : null) ?? [
     dayjs(timeState.value).hour(),
     dayjs(timeState.value).minute(),
     dayjs(timeState.value).second(),
@@ -77,14 +80,15 @@ watch(wScreen, () => {
 </script>
 
 <template>
-  <div class="flex flex-col items-center justify-center gap-3">
+  <div :class="props.intermission ? 'fixed bottom-5 right-6 z-20 flex flex-col items-end justify-end' : 'flex flex-col items-center justify-center gap-3'">
     <!-- メイン表示 -->
     <h1
       v-if="clockEffectState == 'シンプル' || clockEffectState == '自動 (端末に最適化)' && ($device.isSafari || $device.isFirefox)"
+      :style="props.intermission ? { fontSize: `${intermissionClockScaleState}vw`, textShadow: '0 2px 8px #000' } : undefined"
       class="main-clock font-bold leading-none tabular-nums">
       {{ mainClockText }}
     </h1>
-    <h1 v-else class="main-clock font-bold leading-none tabular-nums rolling-clock" :aria-label="mainClockText">
+    <h1 v-else class="main-clock font-bold leading-none tabular-nums rolling-clock" :style="props.intermission ? { fontSize: `${intermissionClockScaleState}vw`, textShadow: '0 2px 8px #000' } : undefined" :aria-label="mainClockText">
       <template v-for="(value, index) in mainClock" :key="index">
         <span v-if="index > 0" aria-hidden="true">:</span>
         <span class="rolling-digit" aria-hidden="true">
@@ -96,7 +100,7 @@ watch(wScreen, () => {
     </h1>
 
     <!-- サブ表示 -->
-    <h2>
+    <h2 v-if="!props.intermission">
       <div v-if="timerState != null" class="flex flex-row items-center">
         <span class="sub-clock mr-3"> {{ dayjs(timeState).format('MM/DD (ddd)') }} </span>
         <div class="sub-clock font-mono">
@@ -121,7 +125,7 @@ watch(wScreen, () => {
     </h2>
 
     <!-- 上部の宣伝画像エリア -->
-    <div v-if="bannerVisible && widthScreenSize().value >= 1280" class="fixed top-0 m-3 z-10">
+    <div v-if="!props.intermission && bannerVisible && widthScreenSize().value >= 1280" class="fixed top-0 m-3 z-10">
       <div v-if="banner != null" class="bg-neutral flex flex-row items-center rounded-xl border-4 overflow-hidden">
         <img :src="banner!" class="h-[17vh]">
       </div>

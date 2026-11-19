@@ -10,6 +10,9 @@ export interface SharedSettings {
   isPreChimeEnabled: boolean;
   isBannerVisible: boolean;
   isVerticalBanner: boolean;
+  intermissionLayoutEnabled: boolean;
+  intermissionGifUrl: string;
+  intermissionClockScale: number;
   dashboardTheme?: DashboardTheme | null;
 }
 
@@ -22,6 +25,9 @@ export const SHARED_SETTING_KEYS = [
   'isPreChimeEnabled',
   'isBannerVisible',
   'isVerticalBanner',
+  'intermissionLayoutEnabled',
+  'intermissionGifUrl',
+  'intermissionClockScale',
 ] as const satisfies readonly (keyof SharedSettings)[];
 
 export type SharedSettingsPolicy = Record<(typeof SHARED_SETTING_KEYS)[number], boolean>;
@@ -41,6 +47,9 @@ export const DEFAULT_SHARED_SETTINGS_POLICY: SharedSettingsPolicy = {
   isPreChimeEnabled: true,
   isBannerVisible: true,
   isVerticalBanner: true,
+  intermissionLayoutEnabled: true,
+  intermissionGifUrl: true,
+  intermissionClockScale: true,
 };
 
 export const LOCAL_SETTINGS_BACKUP_KEY = "cpDashboardLocalSettingsBackupV1";
@@ -127,6 +136,9 @@ function isSharedSettings(value: unknown): value is SharedSettings {
   const settings = value as Record<string, unknown>;
 
   if (settings.countdownTimeDisplayDays === undefined) settings.countdownTimeDisplayDays = 10;
+  if (settings.intermissionLayoutEnabled === undefined) settings.intermissionLayoutEnabled = false;
+  if (settings.intermissionGifUrl === undefined) settings.intermissionGifUrl = '';
+  if (settings.intermissionClockScale === undefined) settings.intermissionClockScale = 6;
   const countdownTimeDisplayDaysValue = settings.countdownTimeDisplayDays;
 
   return (
@@ -138,6 +150,9 @@ function isSharedSettings(value: unknown): value is SharedSettings {
     typeof settings.isPreChimeEnabled === "boolean" &&
     typeof settings.isBannerVisible === "boolean" &&
     typeof settings.isVerticalBanner === "boolean"
+    && (settings.intermissionLayoutEnabled === undefined || typeof settings.intermissionLayoutEnabled === 'boolean')
+    && (settings.intermissionGifUrl === undefined || (typeof settings.intermissionGifUrl === 'string' && settings.intermissionGifUrl.length <= 2048))
+    && (settings.intermissionClockScale === undefined || (typeof settings.intermissionClockScale === 'number' && settings.intermissionClockScale >= 3 && settings.intermissionClockScale <= 16))
   );
 }
 
@@ -159,6 +174,9 @@ export function applySharedSettingsToClient(
   if (apply.isPreChimeEnabled) isPreChimeEnabled().value = settings.isPreChimeEnabled;
   if (apply.isBannerVisible) isBannerVisible().value = settings.isBannerVisible;
   if (apply.isVerticalBanner) isVerticalBanner().value = settings.isVerticalBanner;
+  if (apply.intermissionLayoutEnabled) intermissionLayoutEnabled().value = settings.intermissionLayoutEnabled ?? false;
+  if (apply.intermissionGifUrl) intermissionGifUrl().value = settings.intermissionGifUrl ?? '';
+  if (apply.intermissionClockScale) intermissionClockScale().value = settings.intermissionClockScale ?? 6;
 }
 
 function getSettingsApiBase(): string {
