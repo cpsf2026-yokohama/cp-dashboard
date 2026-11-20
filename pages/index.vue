@@ -137,7 +137,7 @@ function finishScheduledPlayback() {
 }
 
 async function pollPlaybackSchedule() {
-  if (schedulePollInFlight) return
+  if (schedulePollInFlight || document.visibilityState !== 'visible') return
   schedulePollInFlight = true
   try {
     const response = await fetch(`${API_BASE}/schedule`, { cache: 'no-store' })
@@ -167,6 +167,10 @@ async function pollPlaybackSchedule() {
   } finally {
     schedulePollInFlight = false
   }
+}
+
+const refreshScheduleWhenVisible = () => {
+  if (document.visibilityState === 'visible') void pollPlaybackSchedule()
 }
 
 // 一回でも画面がクリックされたかどうか
@@ -239,8 +243,9 @@ onMounted(async () => {
 
   void pollPlaybackSchedule();
   schedulePollTimer = window.setInterval(() => {
-    void pollPlaybackSchedule();
-  }, 10_000);
+    if (document.visibilityState === 'visible') void pollPlaybackSchedule();
+  }, 30_000);
+  document.addEventListener('visibilitychange', refreshScheduleWhenVisible);
 });
 
 onUnmounted(() => {
@@ -250,6 +255,7 @@ onUnmounted(() => {
   }
   if (schedulePollTimer !== undefined)
     window.clearInterval(schedulePollTimer);
+  document.removeEventListener('visibilitychange', refreshScheduleWhenVisible);
   if (playbackStartTimer !== undefined)
     window.clearTimeout(playbackStartTimer);
 });

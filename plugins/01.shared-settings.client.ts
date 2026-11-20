@@ -148,31 +148,33 @@ export default defineNuxtPlugin(async (nuxtApp) => {
   // rather than making it wait for the next timer tick.
   let polling = false;
   const refreshSharedSettings = async () => {
-    if (polling) return;
+    if (polling || document.visibilityState !== 'visible') return;
     polling = true;
     try {
-      const settings = await nuxtApp.runWithContext(loadSharedSettings);
-      await applyRemoteSettings(settings);
-    } catch (cause) {
-      console.warn('共有設定の再読み込みに失敗しました:', cause);
+      try {
+        const settings = await nuxtApp.runWithContext(loadSharedSettings);
+        await applyRemoteSettings(settings);
+      } catch (cause) {
+        console.warn('共有設定の再読み込みに失敗しました:', cause);
+      }
+      try {
+        await applyRemoteBanners();
+      } catch (cause) {
+        console.warn('共有バナーの再読み込みに失敗しました:', cause);
+      }
+      try {
+        await applyRemoteChimes();
+      } catch (cause) {
+        console.warn('共有チャイム音声の再読み込みに失敗しました:', cause);
+      }
     } finally {
       polling = false;
-    }
-    try {
-      await applyRemoteBanners();
-    } catch (cause) {
-      console.warn('共有バナーの再読み込みに失敗しました:', cause);
-    }
-    try {
-      await applyRemoteChimes();
-    } catch (cause) {
-      console.warn('共有チャイム音声の再読み込みに失敗しました:', cause);
     }
   };
   const refreshWhenVisible = () => {
     if (document.visibilityState === 'visible') void refreshSharedSettings();
   };
-  window.setInterval(() => void refreshSharedSettings(), 15_000);
+  window.setInterval(() => void refreshSharedSettings(), 5 * 60_000);
   window.addEventListener('focus', refreshWhenVisible);
   document.addEventListener('visibilitychange', refreshWhenVisible);
 });
